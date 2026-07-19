@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = Path(os.environ.get("MODEL_DOWNLOAD_DIR", ROOT / "models"))
 
 
 def download(
@@ -25,7 +26,7 @@ def download(
 
 def main() -> None:
     download(
-        "Qwen/Qwen3-8B-FP8",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
         MODELS_DIR / "generator",
     )
     download(

@@ -14,6 +14,7 @@ local_test/test/*
 local_test/result/*
 local_test/benchmark_lib/*
 
+models/
 models/**/.cache/
 models/thai_guard_base/
 models/thai_guard_adapter/

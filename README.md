@@ -31,14 +31,14 @@ query
 
 | หน้าที่ | โมเดล |
 |---|---|
-| โมเดลตอบหลัก | `Qwen/Qwen3-8B-FP8` |
+| โมเดลตอบหลัก | `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` |
 | Guard ทั่วไป | `Qwen/Qwen3Guard-Gen-0.6B` |
 | Guard ภาษาไทย | `typhoon-ai/ThaiSafetyClassifier` |
 | Inference engine | `vLLM` |
 
 เหตุผลที่เลือกชุดนี้:
 
-- Qwen3-8B-FP8 เล็กกว่ารุ่น 30B-A3B มาก ทำให้ลดขนาดไฟล์และ Docker build layer ได้ชัดเจน แต่ยังเป็น Qwen3 และเป็น FP8 ที่เหมาะกับ vLLM/H100
+- Qwen3-30B-A3B-Instruct-2507-FP8 เป็น checkpoint FP8 official ของ Qwen เหมาะกับ H100 40 GB และ vLLM มากกว่าการใช้ BF16 เต็มรูปแบบ
 - Qwen3Guard 0.6B เบากว่า 4B ทำให้เหลือ VRAM ให้ main model และ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - Rewrite จำกัดแค่หนึ่งรอบ เพื่อไม่ให้กินเวลาเกิน 30 นาทีและลดโอกาสวนซ้ำ
@@ -78,10 +78,6 @@ query
 │   ├── download_models.py
 │   ├── merge_thai_guard.py
 │   └── validate_submission.py
-└── models/
-    ├── generator/
-    ├── qwen_guard/
-    └── thai_guard/
 ```
 
 ## Path สำคัญของระบบแข่งขัน
@@ -104,41 +100,25 @@ query
 
 โดย `n` คือจำนวน records ที่ประมวลผลเสร็จทั้งหมด
 
-## วิธีเตรียมโมเดลก่อน build
+## วิธีเตรียมโมเดล
 
-ดาวน์โหลดโมเดล:
+เวอร์ชันนี้ใช้วิธี **ดาวน์โหลดโมเดลตอน Docker build** ไม่ต้องเก็บ `models/` ไว้ในเครื่องและไม่ต้อง push model ขึ้น GitHub
 
-```bash
-python -m pip install -r requirements.in
-python scripts/download_models.py
-```
-
-เช็กหรือจัด ThaiSafetyClassifier ให้พร้อมใช้งาน:
+ตอน build, Dockerfile จะรัน:
 
 ```bash
-python scripts/merge_thai_guard.py
+MODEL_DOWNLOAD_DIR=/opt/models python3 /workspace/scripts/download_models.py
 ```
 
-หลัง merge สำเร็จ ควรเหลือโมเดลหลักใน path นี้:
+แล้วดาวน์โหลดโมเดลเข้า image ที่:
 
 ```text
-models/generator/
-models/qwen_guard/
-models/thai_guard/
+/opt/models/generator/
+/opt/models/qwen_guard/
+/opt/models/thai_guard/
 ```
 
-เช็กว่าโมเดลพร้อมก่อน build:
-
-```bash
-python scripts/check_models.py
-```
-
-เวอร์ชันปัจจุบันดาวน์โหลด `typhoon-ai/ThaiSafetyClassifier` ตรงเข้า `models/thai_guard/` จึงไม่สร้าง `thai_guard_base/` และ `thai_guard_adapter/` ให้เปลืองพื้นที่แล้ว หากยังมีโฟลเดอร์เก่าจากรอบก่อน สามารถลบได้:
-
-```text
-models/thai_guard_base/
-models/thai_guard_adapter/
-```
+จากนั้น runtime จะทำงานแบบ offline ด้วย environment `HF_HUB_OFFLINE=1` และ `TRANSFORMERS_OFFLINE=1`
 
 ## วิธี build Docker
 
@@ -146,7 +126,7 @@ models/thai_guard_adapter/
 docker compose build
 ```
 
-Dockerfile จะ copy โมเดลจาก `models/` เข้า `/opt/models` เพื่อให้ runtime ทำงานแบบ offline ได้ และจะติดตั้งเฉพาะ runtime dependency เบาๆ จาก `requirements.lock` เพื่อหลีกเลี่ยงการทับ version ของ PyTorch, Transformers และ vLLM ที่มากับ base image
+Dockerfile จะดาวน์โหลดโมเดลเข้า `/opt/models` ระหว่าง build เพื่อให้ runtime ทำงานแบบ offline ได้ และจะติดตั้งเฉพาะ dependency เบาๆ จาก `requirements.lock` เพื่อหลีกเลี่ยงการทับ version ของ PyTorch, Transformers และ vLLM ที่มากับ base image
 
 ## การ push ขึ้น GitHub
 
@@ -154,13 +134,9 @@ Dockerfile จะ copy โมเดลจาก `models/` เข้า `/opt/mod
 
 ไฟล์ `.gitignore` จึง ignore `models/`, local test data, output, cache และ virtual environment แล้ว
 
-เวลาคนอื่น clone repo ให้เตรียมโมเดลเองด้วย:
+เวลาคนอื่น clone repo สามารถ build ได้เลยถ้าเครื่อง build มี internet:
 
 ```bash
-python -m pip install -r requirements.in
-python scripts/download_models.py
-python scripts/merge_thai_guard.py
-python scripts/check_models.py
 docker compose build
 ```
 
