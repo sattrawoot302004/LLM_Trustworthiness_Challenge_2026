@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from app.normalization import normalize_text
+from app.policies.rule_guard import inspect_query
 from app.risk_router import RouteName
 
 
 GENERAL_ERROR_FALLBACK = (
-    "ขออภัย ไม่สามารถสร้างคำตอบที่สมบูรณ์สำหรับคำถามนี้ได้อย่างมั่นใจ"
+    "ขออภัย ไม่สามารถสร้างคำตอบที่สมบูรณ์สำหรับคำถามนี้ได้อย่างมั่นใจ "
+    "แนวทางที่ปลอดภัยคือแยกประเด็นของคำถาม ตรวจสอบแหล่งข้อมูลที่น่าเชื่อถือ "
+    "และใช้ข้อมูลล่าสุดหรือผู้เชี่ยวชาญเมื่อคำตอบมีผลกระทบสำคัญ"
 )
 
 SAFE_SENSITIVE_FALLBACK = (
@@ -18,9 +22,134 @@ UNSAFE_FALLBACK = (
 )
 
 
-def fallback_for_route(route_name: str) -> str:
-    if route_name == RouteName.UNSAFE:
-        return UNSAFE_FALLBACK
-    if route_name == RouteName.SAFE_SENSITIVE:
-        return SAFE_SENSITIVE_FALLBACK
+def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+
+def _unsafe_fallback(query: str) -> str:
+    rule_result = inspect_query(normalize_text(query))
+    categories = set(rule_result.categories)
+    text = normalize_text(query)
+
+    if "self_harm" in categories or _has_any(
+        text,
+        ("suicide", "ฆ่าตัวตาย", "ทำร้ายตัวเอง", "ไม่อยากอยู่"),
+    ):
+        return (
+            "ผมไม่สามารถช่วยแนะนำวิธีทำร้ายตัวเองได้ หากคุณหรือใครบางคนกำลังเสี่ยงอันตราย "
+            "ให้ถอยออกจากสิ่งที่ใช้ทำร้ายตัวเอง ติดต่อคนใกล้ตัวทันที หรือขอความช่วยเหลือจากหน่วยฉุกเฉินในพื้นที่ "
+            "ผมช่วยคิดขั้นตอนดูแลความปลอดภัยในตอนนี้หรือเรียบเรียงข้อความขอความช่วยเหลือได้"
+        )
+
+    if "cyber_abuse" in categories or _has_any(
+        text,
+        ("hack", "malware", "ransomware", "keylogger", "phishing", "เจาะ", "ขโมยรหัส"),
+    ):
+        return (
+            "ขออภัย ไม่สามารถให้ขั้นตอนเจาะระบบ ขโมยรหัสผ่าน หรือสร้างเครื่องมือโจมตีได้ "
+            "แต่แนวทางที่ปลอดภัยคือใช้เฉพาะระบบที่ได้รับอนุญาต อัปเดตแพตช์ เปิด MFA จำกัดสิทธิ์บัญชี "
+            "สำรองข้อมูล ตรวจ log เหตุผิดปกติ และทดสอบความปลอดภัยใน lab หรือขอบเขตที่ได้รับอนุญาตเท่านั้น"
+        )
+
+    if "weapons" in categories or _has_any(
+        text,
+        ("bomb", "explosive", "ระเบิด", "อาวุธ", "ปืน"),
+    ):
+        return (
+            "ขออภัย ไม่สามารถให้สูตร วิธีประกอบ หรือขั้นตอนใช้อาวุธและวัตถุอันตรายได้ "
+            "ข้อมูลที่ปลอดภัยคือการหลีกเลี่ยงการสัมผัส แจ้งผู้เชี่ยวชาญหรือหน่วยงานที่รับผิดชอบ "
+            "เก็บระยะห่างจากพื้นที่เสี่ยง และเรียนรู้หลักความปลอดภัยกับกฎหมายที่เกี่ยวข้องในระดับภาพรวม"
+        )
+
+    if "drugs" in categories or _has_any(
+        text,
+        ("meth", "heroin", "ยาไอซ์", "ยาเสพติด", "สังเคราะห์ยา"),
+    ):
+        return (
+            "ขออภัย ไม่สามารถให้วิธีผลิต สกัด หรือใช้สารเสพติดอย่างผิดกฎหมายได้ "
+            "ถ้าต้องการข้อมูลเชิงปลอดภัย สามารถอธิบายความเสี่ยงต่อสุขภาพ ผลทางกฎหมาย "
+            "สัญญาณอันตราย และช่องทางขอคำปรึกษาจากแพทย์หรือผู้เชี่ยวชาญด้านการบำบัดได้"
+        )
+
+    if "fraud" in categories or _has_any(
+        text,
+        ("forge", "phishing", "ปลอมเอกสาร", "ฟิชชิง", "หลอกโอน", "โกง"),
+    ):
+        return (
+            "ขออภัย ไม่สามารถช่วยปลอมแปลงเอกสาร หลอกลวง หรือสร้างข้อความเพื่อขโมยข้อมูลได้ "
+            "แต่สามารถช่วยทำเช็กลิสต์ป้องกัน เช่น ตรวจ URL และผู้ส่ง ใช้ MFA ไม่ส่งรหัสผ่านทางแชต "
+            "ยืนยันตัวตนผ่านช่องทางทางการ และเก็บหลักฐานเพื่อรายงานเมื่อพบความเสี่ยง"
+        )
+
+    return UNSAFE_FALLBACK
+
+
+def _sensitive_fallback(query: str) -> str:
+    text = normalize_text(query)
+
+    if _has_any(text, ("กฎหมาย", "ภาษี", "สัญญา", "คดี", "tax", "legal", "law")):
+        return (
+            "ตอบได้ในระดับข้อมูลทั่วไป: ให้เริ่มจากระบุประเทศหรือเขตอำนาจ กฎหมายหรือเอกสารที่เกี่ยวข้อง "
+            "ข้อเท็จจริงสำคัญ วันที่ และผลลัพธ์ที่ต้องการ จากนั้นตรวจแหล่งข้อมูลทางการหรือปรึกษาผู้เชี่ยวชาญ "
+            "เพราะรายละเอียดทางกฎหมายและภาษีเปลี่ยนตามพื้นที่และช่วงเวลา"
+        )
+
+    if _has_any(text, ("สุขภาพ", "แพทย์", "ยา", "อาการ", "โรค", "medical", "medicine")):
+        return (
+            "ตอบได้ในระดับข้อมูลสุขภาพทั่วไป: สังเกตอาการสำคัญ ระยะเวลาที่เป็น ยาที่ใช้ โรคประจำตัว "
+            "และปัจจัยเสี่ยง หากมีอาการรุนแรง เจ็บหน้าอก หายใจลำบาก หมดสติ เลือดออกมาก "
+            "หรืออาการแย่ลงเร็ว ควรติดต่อแพทย์หรือหน่วยฉุกเฉินทันที"
+        )
+
+    if _has_any(text, ("ลงทุน", "หุ้น", "คริปโต", "การเงิน", "finance", "invest", "crypto")):
+        return (
+            "ตอบได้ในระดับข้อมูลการเงินทั่วไป: ประเมินเป้าหมาย ระยะเวลาลงทุน ความเสี่ยงที่รับได้ "
+            "ค่าธรรมเนียม สภาพคล่อง และการกระจายความเสี่ยง หลีกเลี่ยงการตัดสินใจจากคำแนะนำเดียว "
+            "และตรวจข้อมูลล่าสุดจากแหล่งทางการก่อนลงเงินจริง"
+        )
+
+    if _has_any(text, ("cyber", "security", "server", "linux", "password", "ความปลอดภัย")):
+        return (
+            "ตอบได้ในมุมป้องกันและดูแลระบบ: ตรวจสิทธิ์ผู้ใช้ อัปเดตแพตช์ เปิด MFA สำรองข้อมูล "
+            "เก็บ log ที่จำเป็น จำกัด service ที่เปิดสู่ภายนอก และทดสอบเฉพาะระบบที่คุณมีสิทธิ์ดูแล"
+        )
+
+    return SAFE_SENSITIVE_FALLBACK
+
+
+def _safe_direct_fallback(query: str) -> str:
+    text = normalize_text(query)
+
+    if _has_any(text, ("kill process", "kill pid", "kill -9", "หยุดโปรเซส", "ปิดโปรเซส")) or (
+        _has_any(text, ("linux", "ubuntu", "debian", "server"))
+        and _has_any(text, ("process", "pid", "โปรเซส", "kill", "หยุด", "ปิด"))
+    ):
+        return (
+            "บน Linux ให้หา PID ด้วยคำสั่งเช่น `ps aux | grep ชื่อโปรแกรม` หรือ `pgrep ชื่อโปรแกรม` "
+            "แล้วหยุดด้วย `kill PID` ซึ่งส่งสัญญาณ TERM ก่อน หากยังไม่หยุดจึงค่อยใช้ `kill -9 PID` อย่างระวัง "
+            "เพราะอาจทำให้ข้อมูลที่ยังไม่บันทึกสูญหายได้"
+        )
+
+    if _has_any(text, ("python", "javascript", "sql", "code", "โปรแกรม", "debug")):
+        return (
+            "แนวทางแก้ปัญหาโปรแกรมคืออ่าน error แรกให้ชัด ตรวจ input/output ที่คาดหวัง "
+            "ลดตัวอย่างให้เล็กที่สุด แล้วเช็กทีละส่วน เช่น dependency, path, type ของข้อมูล, permission "
+            "และเพิ่ม log เฉพาะจุดที่สงสัยเพื่อหาสาเหตุจริง"
+        )
+
+    if _has_any(text, ("สรุป", "อธิบาย", "แปล", "rewrite", "summary", "explain")):
+        return (
+            "สรุปให้เป็นขั้นตอนสั้นๆ ได้ดังนี้: ระบุประเด็นหลัก แยกข้อมูลที่เป็นข้อเท็จจริงออกจากความคิดเห็น "
+            "จัดลำดับจากสำคัญไปน้อย และใช้ภาษาที่ตรงไปตรงมา พร้อมตรวจว่าความหมายเดิมยังไม่เปลี่ยน"
+        )
+
     return GENERAL_ERROR_FALLBACK
+
+
+def fallback_for_route(route_name: str, original_query: str = "") -> str:
+    if route_name == RouteName.UNSAFE:
+        return _unsafe_fallback(original_query)
+    if route_name == RouteName.SAFE_SENSITIVE:
+        return _sensitive_fallback(original_query)
+    return _safe_direct_fallback(original_query)

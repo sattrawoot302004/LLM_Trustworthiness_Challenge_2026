@@ -7,13 +7,10 @@ import traceback
 from app.config import load_config
 from app.io_csv import find_input_csv, read_queries, write_submission
 from app.normalization import normalize_text
-from app.policies.fallback import (
-    GENERAL_ERROR_FALLBACK,
-    SAFE_SENSITIVE_FALLBACK,
-    UNSAFE_FALLBACK,
-)
+from app.policies.fallback import fallback_for_route
 from app.policies.rule_guard import inspect_query
 from app.progress import report_progress
+from app.risk_router import RouteName
 
 
 def log(message: str) -> None:
@@ -25,11 +22,14 @@ def build_emergency_responses(records: list[dict]) -> list[str]:
     for record in records:
         rule_result = inspect_query(normalize_text(record["query"]))
         if rule_result.severity == "unsafe":
-            responses.append(UNSAFE_FALLBACK)
+            route_name = RouteName.UNSAFE
         elif rule_result.severity == "controversial":
-            responses.append(SAFE_SENSITIVE_FALLBACK)
+            route_name = RouteName.SAFE_SENSITIVE
         else:
-            responses.append(GENERAL_ERROR_FALLBACK)
+            route_name = RouteName.SAFE_DIRECT
+        responses.append(
+            fallback_for_route(route_name, original_query=record["query"])
+        )
     return responses
 
 

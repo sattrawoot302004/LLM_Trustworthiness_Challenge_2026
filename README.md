@@ -24,7 +24,7 @@ query
   -> ThaiSafetyClassifier ตรวจคำตอบในบริบทภาษาไทย
   -> ถ้าผ่าน ส่งคำตอบ
   -> ถ้าไม่ผ่าน rewrite ด้วย main model สูงสุดหนึ่งรอบ
-  -> ถ้ายังไม่ผ่าน ใช้ safe fallback
+  -> ถ้ายังไม่ผ่าน ใช้ contextual safe fallback
 ```
 
 โมเดลที่ตั้งใจใช้:
@@ -42,6 +42,7 @@ query
 - Qwen3Guard 0.6B เบากว่า 4B ทำให้เหลือ VRAM ให้ main model และ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - Rewrite จำกัดแค่หนึ่งรอบ เพื่อไม่ให้กินเวลาเกิน 30 นาทีและลดโอกาสวนซ้ำ
+- Fallback ไม่ใช่คำตอบปฏิเสธแบบเดียวทุกข้อ แต่เลือก template จาก route และเนื้อคำถาม เพื่อให้ยังได้คะแนน Helpfulness เท่าที่ปลอดภัย
 
 ## โครงสร้างไฟล์
 
@@ -160,11 +161,23 @@ docker build \
 7. `app/inference/generator.py` ใช้ vLLM สร้างคำตอบแบบ batch
 8. Output ถูกตรวจด้วย Qwen3Guard และ ThaiSafetyClassifier
 9. ถ้าไม่ผ่าน จะ rewrite หนึ่งรอบด้วย prompt `prompts/rewrite_th.txt`
-10. ถ้ายังไม่ผ่าน จะใช้ fallback ตาม route
+10. ถ้ายังไม่ผ่าน จะใช้ contextual fallback ตาม route และเนื้อคำถาม
 11. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
 12. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น
 
 หมายเหตุเรื่อง log ของระบบแข่งขัน: `run.py` จะ sleep ตอนเริ่มต้น 10 วินาทีผ่านค่า `STARTUP_SLEEP_SECONDS` เพื่อให้ระบบ log ของเว็บมีเวลาจับ output ก่อนโหลดโมเดล หากต้องการปรับเวลาให้ตั้ง environment variable นี้ได้
+
+## Contextual fallback
+
+Fallback คือคำตอบสำรองที่ใช้เมื่อคำตอบจากโมเดลไม่ผ่าน guard หลัง rewrite หนึ่งรอบ หรือใช้เมื่อ pipeline หลักโหลดโมเดลไม่สำเร็จแล้วต้องสร้าง `submission.csv` ให้ครบ
+
+ระบบจะไม่ใช้ประโยคกลางๆ เหมือนกันทุกคำถาม แต่จะดู route และ keyword/category จากคำถาม เช่น:
+
+- `UNSAFE`: ปฏิเสธเฉพาะขั้นตอนอันตราย และเสนอข้อมูลปลอดภัยแทน เช่น การป้องกัน ความเสี่ยง หรือการขอความช่วยเหลือ
+- `SAFE_SENSITIVE`: ตอบเป็นข้อมูลทั่วไปตามโดเมน เช่น กฎหมาย สุขภาพ การเงิน หรือ cyber defensive โดยเลี่ยงคำแนะนำเฉพาะที่เสี่ยง
+- `SAFE_DIRECT`: ถ้าเป็นคำถามปลอดภัยที่รู้ pattern ชัด เช่น Linux process, coding/debug, สรุป/อธิบาย จะให้คำตอบสั้นที่ยังใช้งานได้
+
+ตัวอย่างเช่น คำถาม `kill process ใน Linux` จะไม่ถูกปฏิเสธแบบอันตราย แต่ fallback จะอธิบายการหา PID และใช้ `kill`/`kill -9` อย่างระวัง เพราะบริบทนี้เป็นงานดูแลระบบที่ปลอดภัย
 
 ## สิ่งที่ช่วยเพิ่ม Safety
 
@@ -172,13 +185,14 @@ docker build \
 - แยก route ระหว่างคำถามปลอดภัย คำถามอ่อนไหว และคำถามอันตราย
 - ปฏิเสธเฉพาะส่วนอันตราย ไม่ปฏิเสธทั้งคำถามโดยไม่จำเป็น
 - ตัด `<think>...</think>` และ role prefix ก่อนเขียน CSV
-- ใช้ fallback แบบ deterministic เมื่อ guard ไม่ผ่านหลัง rewrite
+- ใช้ fallback แบบ deterministic แต่เลือกเนื้อหาตามประเภทคำถาม เมื่อ guard ไม่ผ่านหลัง rewrite
 
 ## สิ่งที่ช่วยรักษา Helpfulness
 
 - คำถาม safe ใช้ prompt ที่สั่งให้ตอบตรงและครบถ้วน
 - คำถาม sensitive ที่ยังตอบได้ จะตอบในระดับข้อมูลทั่วไปหรือการป้องกัน
 - ถ้า output guard ไม่ผ่าน จะ rewrite หนึ่งรอบก่อน fallback เพื่อไม่เสียคำตอบดีๆ ทันที
+- fallback มี template เฉพาะทางสำหรับบางหมวด เช่น Linux, coding/debug, กฎหมาย, สุขภาพ, การเงิน, cyber defensive, self-harm, weapons, drugs และ fraud
 - Keyword เดี่ยวๆ ไม่ได้ทำให้ระบบปฏิเสธทันที เช่นคำว่า `kill process` ใน Linux ควรยังตอบได้
 
 ## หมายเหตุ

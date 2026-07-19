@@ -51,8 +51,9 @@ class TrustworthinessPipeline:
             max_tokens=[route.max_tokens for route in routes],
         )
         drafts = [
-            clean_response(draft, max_chars=max_chars) or fallback_for_route(route.name)
-            for draft, route in zip(drafts, routes, strict=True)
+            clean_response(draft, max_chars=max_chars)
+            or fallback_for_route(route.name, original_query=query)
+            for draft, route, query in zip(drafts, routes, original_queries, strict=True)
         ]
 
         qwen_output = self.input_guard.classify_responses(original_queries, drafts)
@@ -113,13 +114,21 @@ class TrustworthinessPipeline:
                 final_responses[record_index] = (
                     candidate
                     if candidate and accept
-                    else fallback_for_route(routes[record_index].name)
+                    else fallback_for_route(
+                        routes[record_index].name,
+                        original_query=original_queries[record_index],
+                    )
                 )
 
         return [
             clean_response(response, max_chars=max_chars)
-            or fallback_for_route(route.name)
-            for response, route in zip(final_responses, routes, strict=True)
+            or fallback_for_route(route.name, original_query=query)
+            for response, route, query in zip(
+                final_responses,
+                routes,
+                original_queries,
+                strict=True,
+            )
         ]
 
     def _accept_output(
