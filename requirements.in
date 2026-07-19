@@ -1,0 +1,5 @@
+PyYAML
+ftfy
+regex
+sentencepiece
+huggingface_hub

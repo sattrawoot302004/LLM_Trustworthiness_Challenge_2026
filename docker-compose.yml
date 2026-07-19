@@ -1,0 +1,29 @@
+services:
+  llm-trust:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: registry.ai.in.th/2026-trustworthy/f23c54a1/sattrawoot_302004.yx4m:v1.0.2
+    platform: linux/amd64
+    working_dir: /workspace
+    network_mode: "none"
+    ipc: host
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      CUDA_VISIBLE_DEVICES: "0"
+      PYTHONUNBUFFERED: "1"
+      STARTUP_SLEEP_SECONDS: "10"
+    volumes:
+      - ./test:/model/test:ro
+      - ./result:/result:rw
+      - ./benchmark_lib:/benchmark_lib:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

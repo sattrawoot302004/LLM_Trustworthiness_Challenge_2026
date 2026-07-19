@@ -1,0 +1,31 @@
+# Model weights are downloaded locally before Docker build.
+models/
+
+# Local test data and generated outputs.
+local_test/test/
+local_test/result/
+local_test/benchmark_lib/
+
+# Python artifacts.
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local env files.
+.env
+.venv/
+venv/
+
+# Logs and temporary files.
+*.log
+*.tmp
+submission.csv
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
