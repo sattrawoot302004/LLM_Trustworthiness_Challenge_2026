@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: registry.ai.in.th/2026-trustworthy/f23c54a1/sattrawoot_302004.yx4m:v1.0.2
+    image: registry.ai.in.th/2026-trustworthy/f23c54a1/sattrawoot_302004.yx4m:V.2.0.1
     platform: linux/amd64
     working_dir: /workspace
     network_mode: "none"

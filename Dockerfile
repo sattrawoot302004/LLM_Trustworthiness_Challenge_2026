@@ -1,15 +1,24 @@
-ARG VLLM_IMAGE=vllm/vllm-openai:v0.10.2
-FROM ${VLLM_IMAGE}
+FROM python:3.12-slim-bookworm
 
-USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgomp1 \
+        libnuma1 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 
 COPY requirements.lock /workspace/requirements.lock
-RUN python3 -m pip install --no-cache-dir -r /workspace/requirements.lock
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r /workspace/requirements.lock \
+    && python -m pip install --no-cache-dir vllm==0.10.2
 
 RUN mkdir -p /workspace/scripts
 COPY scripts/download_models.py /workspace/scripts/download_models.py
-RUN HF_HOME=/tmp/hf-cache MODEL_DOWNLOAD_DIR=/opt/models python3 /workspace/scripts/download_models.py \
+RUN HF_HOME=/tmp/hf-cache MODEL_DOWNLOAD_DIR=/opt/models python /workspace/scripts/download_models.py \
     && rm -rf /opt/models/*/.cache /tmp/hf-cache
 
 COPY run.py /workspace/run.py
@@ -33,4 +42,4 @@ ENV PYTHONUNBUFFERED=1
 ENV MODEL_ROOT=/opt/models
 
 ENTRYPOINT []
-CMD ["python3", "/workspace/run.py"]
+CMD ["python", "/workspace/run.py"]
