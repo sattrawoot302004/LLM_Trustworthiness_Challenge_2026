@@ -18,32 +18,21 @@ class Route:
     reason: str
 
 
-def _severity(assessment: dict) -> str:
-    return str(assessment.get("severity", "safe")).lower()
-
-
 def route_query(
     query: str,
-    qwen_assessment: dict,
     rule_result: RuleResult,
     limits: dict,
 ) -> Route:
     del query
 
-    qwen_label = _severity(qwen_assessment)
-
-    if rule_result.severity == "unsafe" or qwen_label == "unsafe":
+    if rule_result.severity == "unsafe":
         return Route(
             name=RouteName.UNSAFE,
             max_tokens=int(limits["unsafe_tokens"]),
-            reason="unsafe input guard",
+            reason="unsafe rule guard",
         )
 
-    if (
-        rule_result.severity == "controversial"
-        or qwen_label == "controversial"
-        or rule_result.looks_like_jailbreak
-    ):
+    if rule_result.severity == "controversial" or rule_result.looks_like_jailbreak:
         return Route(
             name=RouteName.SAFE_SENSITIVE,
             max_tokens=int(limits["safe_sensitive_tokens"]),

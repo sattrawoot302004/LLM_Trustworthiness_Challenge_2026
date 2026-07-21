@@ -30,10 +30,6 @@ def main() -> None:
         MODELS_DIR / "generator",
     )
     download(
-        "Qwen/Qwen3Guard-Gen-0.6B",
-        MODELS_DIR / "qwen_guard",
-    )
-    download(
         "typhoon-ai/ThaiSafetyClassifier",
         MODELS_DIR / "thai_guard",
         ignore_patterns=[

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.inference.generator import MainGenerator
-from app.inference.qwen_guard import QwenGuard
 from app.inference.thai_guard import ThaiSafetyGuard
 from app.normalization import normalize_text
 from app.policies.fallback import fallback_for_route
@@ -17,7 +16,6 @@ from app.risk_router import Route, route_query
 class TrustworthinessPipeline:
     def __init__(self, config: dict) -> None:
         self.config = config
-        self.input_guard = QwenGuard(config)
         self.thai_guard = ThaiSafetyGuard(config)
         self.generator = MainGenerator(config)
 
@@ -31,12 +29,10 @@ class TrustworthinessPipeline:
         normalized_queries = [normalize_text(query) for query in original_queries]
         rule_results = [inspect_query(query) for query in normalized_queries]
 
-        input_assessments = self.input_guard.classify_prompts(normalized_queries)
         routes = [
-            route_query(query, qwen_assessment, rule_result, limits)
-            for query, qwen_assessment, rule_result in zip(
+            route_query(query, rule_result, limits)
+            for query, rule_result in zip(
                 normalized_queries,
-                input_assessments,
                 rule_results,
                 strict=True,
             )
@@ -56,20 +52,18 @@ class TrustworthinessPipeline:
             for draft, route, query in zip(drafts, routes, original_queries, strict=True)
         ]
 
-        qwen_output = self.input_guard.classify_responses(original_queries, drafts)
         thai_output = self.thai_guard.classify_batch(original_queries, drafts)
 
         final_responses = list(drafts)
         rewrite_indices: list[int] = []
         rewrite_reasons: list[str] = []
 
-        for index, (route, draft, qwen_assessment, thai_assessment) in enumerate(
-            zip(routes, drafts, qwen_output, thai_output, strict=True)
+        for index, (route, draft, thai_assessment) in enumerate(
+            zip(routes, drafts, thai_output, strict=True)
         ):
             accept, reason = self._accept_output(
                 route=route,
                 response=draft,
-                qwen_assessment=qwen_assessment,
                 thai_assessment=thai_assessment,
             )
             if not accept:
@@ -100,7 +94,6 @@ class TrustworthinessPipeline:
             ]
 
             rewrite_queries = [original_queries[index] for index in rewrite_indices]
-            qwen_recheck = self.input_guard.classify_responses(rewrite_queries, rewritten)
             thai_recheck = self.thai_guard.classify_batch(rewrite_queries, rewritten)
 
             for local_index, record_index in enumerate(rewrite_indices):
@@ -108,7 +101,6 @@ class TrustworthinessPipeline:
                 accept, _ = self._accept_output(
                     route=routes[record_index],
                     response=candidate,
-                    qwen_assessment=qwen_recheck[local_index],
                     thai_assessment=thai_recheck[local_index],
                 )
                 final_responses[record_index] = (
@@ -135,12 +127,10 @@ class TrustworthinessPipeline:
         self,
         route: Route,
         response: str,
-        qwen_assessment: dict,
         thai_assessment: dict,
     ) -> tuple[bool, str]:
         del route
 
-        qwen_severity = str(qwen_assessment.get("severity", "safe")).lower()
         thai_label = str(thai_assessment.get("label", "safe")).lower()
         thai_harmful_probability = float(
             thai_assessment.get("harmful_probability", 0.0)
@@ -152,11 +142,9 @@ class TrustworthinessPipeline:
             return False, "empty response"
         if response_rules.severity == "unsafe":
             return False, response_rules.reason
-        if qwen_severity == "unsafe":
-            return False, "qwen output guard unsafe"
+        if thai_label == "unknown":
+            return False, "thai safety classifier unavailable"
         if thai_label == "harmful" or thai_harmful_probability >= threshold:
             return False, "thai safety classifier harmful"
-        if qwen_severity == "controversial" and thai_label != "safe":
-            return False, "guards disagree on sensitive output"
 
         return True, "accepted"

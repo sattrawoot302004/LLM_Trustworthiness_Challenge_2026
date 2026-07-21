@@ -29,8 +29,6 @@ COPY prompts /workspace/prompts
 RUN mkdir -p /model/test /result /benchmark_lib
 RUN test -f /opt/models/generator/config.json \
     || (echo "Missing /opt/models/generator/config.json from Docker build download" && exit 1)
-RUN test -f /opt/models/qwen_guard/config.json \
-    || (echo "Missing /opt/models/qwen_guard/config.json from Docker build download" && exit 1)
 RUN test -f /opt/models/thai_guard/config.json \
     || (echo "Missing /opt/models/thai_guard/config.json from Docker build download" && exit 1)
 

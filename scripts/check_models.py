@@ -9,7 +9,6 @@ MODELS_DIR = Path(os.environ.get("MODEL_DOWNLOAD_DIR", ROOT / "models"))
 
 REQUIRED_FILES = {
     "generator": MODELS_DIR / "generator" / "config.json",
-    "qwen_guard": MODELS_DIR / "qwen_guard" / "config.json",
     "thai_guard": MODELS_DIR / "thai_guard" / "config.json",
 }
 

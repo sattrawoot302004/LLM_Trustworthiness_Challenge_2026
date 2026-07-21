@@ -17,20 +17,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "models": {
         "root": "/opt/models",
         "generator": "/opt/models/generator",
-        "qwen_guard": "/opt/models/qwen_guard",
         "thai_guard": "/opt/models/thai_guard",
     },
     "generation": {
-        "max_model_len": 4096,
-        "gpu_memory_utilization": 0.82,
+        "max_model_len": 8192,
+        "gpu_memory_utilization": 0.90,
         "max_num_seqs": 16,
         "temperature": 0.2,
         "top_p": 0.9,
         "seed": 42,
     },
     "guards": {
-        "qwen_device": "cuda",
-        "qwen_max_tokens": 48,
         "thai_device": "cpu",
         "thai_batch_size": 16,
         "thai_harmful_threshold": 0.70,
@@ -68,7 +65,6 @@ def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
     if model_root:
         config["models"]["root"] = model_root
         config["models"]["generator"] = str(Path(model_root) / "generator")
-        config["models"]["qwen_guard"] = str(Path(model_root) / "qwen_guard")
         config["models"]["thai_guard"] = str(Path(model_root) / "thai_guard")
 
     config["paths"]["input_dir"] = os.environ.get(

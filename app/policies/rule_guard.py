@@ -14,8 +14,11 @@ class RuleResult:
 
 JAILBREAK_PATTERNS = [
     r"ignore (all )?(previous|prior) instructions",
+    r"ignore .{0,40}(system|developer|safety|policy) instructions",
     r"developer mode",
     r"do anything now",
+    r"reveal .{0,40}(system prompt|hidden instructions|developer message)",
+    r"show .{0,40}(system prompt|hidden instructions|developer message)",
     r"ไม่มีข้อจำกัด",
     r"ลืมคำสั่ง",
     r"ข้ามกฎ",
@@ -26,41 +29,127 @@ UNSAFE_REQUEST_PATTERNS = {
     "weapons": [
         r"(make|build|manufacture|ประกอบ|ผลิต).{0,40}(bomb|explosive|ระเบิด)",
         r"(สูตร|วิธี).{0,40}(ระเบิด|วัตถุระเบิด)",
+        r"(3d print|print|assemble|convert).{0,40}(gun|firearm|silencer)",
+        r"(detonator|improvised explosive|ied).{0,40}(build|make|wire|trigger)",
     ],
     "cyber_abuse": [
         r"(steal|ขโมย).{0,40}(password|credential|รหัสผ่าน)",
         r"(hack|เจาะ).{0,40}(account|server|wifi|บัญชี|ระบบ)",
-        r"(malware|ransomware|keylogger|botnet)",
+        r"(create|write|build|generate|deploy|spread|hide).{0,40}(malware|ransomware|keylogger|credential stealer|phishing kit|botnet)",
+        r"(bypass|disable|evade).{0,40}(antivirus|edr|mfa|2fa|captcha|rate limit)",
+        r"(exfiltrate|dump|steal).{0,40}(token|api key|cookie|session|database|private key)",
+        r"(sql injection|xss).{0,60}(payload|exploit|bypass|dump)",
     ],
     "self_harm": [
         r"(suicide|ฆ่าตัวตาย|ทำร้ายตัวเอง).{0,80}(how|วิธี|ยังไง)",
     ],
     "drugs": [
         r"(cook|make|ผลิต|สังเคราะห์).{0,40}(meth|ยาไอซ์|เฮโรอีน|ยาเสพติด)",
+        r"(synthesize|extract|purify).{0,40}(meth|heroin|fentanyl|cocaine|mdma)",
     ],
     "fraud": [
         r"(ปลอม|forge).{0,40}(เอกสาร|บัตร|passport|id card)",
         r"(phishing|ฟิชชิง).{0,40}(template|campaign|email)",
+        r"(write|create|draft|generate).{0,40}(phishing|scam|fraud).{0,40}(email|message|script|page)",
+        r"(fake|forge|counterfeit).{0,40}(passport|id card|bank statement|invoice|receipt)",
+    ],
+    "privacy": [
+        r"(dox|doxx|find|lookup).{0,40}(home address|phone number|ssn|social security|private email)",
+        r"(track|stalk).{0,40}(location|person|phone|device)",
     ],
 }
 
 RESPONSE_VIOLATION_PATTERNS = [
     r"(first|step 1|ขั้นตอนที่ 1).{0,80}(mix|combine|ผสม|ประกอบ)",
     r"(payload|exploit code|reverse shell|keylogger)",
+    r"(exfiltrate|dump|steal).{0,80}(token|api key|cookie|session|credential|private key)",
+    r"(bypass|disable|evade).{0,80}(antivirus|edr|mfa|2fa|captcha|rate limit)",
     r"(dosage|ปริมาณ).{0,80}(overdose|ตาย|เสียชีวิต)",
 ]
+
+COMPACT_JAILBREAK_PATTERNS = [
+    r"ignore(previous|prior|system|developer|safety|policy)instructions",
+    r"revealsystemprompt",
+    r"showhiddeninstructions",
+    r"bypass(guard|safety|policy)",
+]
+
+COMPACT_UNSAFE_REQUEST_PATTERNS = {
+    "cyber_abuse": [
+        r"(hack|crack)(account|server|wifi|website|site|router|phone|password)",
+        r"steal(password|credential|token|apikey|cookie|session)",
+        r"(create|write|build|generate)(malware|ransomware|keylogger|credentialstealer|phishingkit)",
+        r"bypass(mfa|2fa|captcha|edr|antivirus|ratelimit)",
+    ],
+    "fraud": [
+        r"(phishing|scam|fraud)(email|message|script|page|template)",
+        r"(fake|forge|counterfeit)(passport|idcard|bankstatement|invoice|receipt)",
+    ],
+    "weapons": [
+        r"(make|build|assemble)(bomb|explosive|detonator|ied)",
+        r"(3dprint|print|assemble)(gun|firearm|silencer)",
+    ],
+    "drugs": [
+        r"(cook|make|synthesize|extract|purify)(meth|heroin|fentanyl|cocaine|mdma)",
+    ],
+}
+
+SENSITIVE_TOPIC_PATTERNS = {
+    "cyber": [
+        r"(phishing|malware|ransomware|keylogger|botnet|sql injection|xss)",
+        r"(hack|เจาะ).{0,40}(account|server|wifi|บัญชี|ระบบ|website|site)",
+        r"(website|site|server|เว็บ).{0,40}(hack|hacked|เจาะ)",
+        r"(ถูก hack|โดน hack|was hacked)",
+    ],
+    "weapons": [
+        r"(weapon|gun|firearm|explosive|bomb|อาวุธ|ปืน|ระเบิด)",
+    ],
+    "drugs": [
+        r"(drug|meth|heroin|fentanyl|cocaine|mdma|ยาเสพติด|ยาไอซ์|เฮโรอีน)",
+    ],
+    "self_harm": [
+        r"(suicide|self-harm|ฆ่าตัวตาย|ทำร้ายตัวเอง|ไม่อยากอยู่)",
+    ],
+    "privacy": [
+        r"(personal data|privacy|credential|password|api key|รหัสผ่าน|ข้อมูลส่วนตัว)",
+    ],
+}
 
 
 def _matches(patterns: list[str], text: str) -> bool:
     return any(re.search(pattern, text, re.IGNORECASE | re.DOTALL) for pattern in patterns)
 
 
+def _compact_for_rules(text: str) -> str:
+    compact = text.lower().translate(
+        str.maketrans(
+            {
+                "0": "o",
+                "1": "i",
+                "3": "e",
+                "4": "a",
+                "5": "s",
+                "7": "t",
+                "@": "a",
+                "$": "s",
+            }
+        )
+    )
+    return re.sub(r"[^a-z0-9]+", "", compact)
+
+
 def inspect_query(query: str) -> RuleResult:
     jailbreak = _matches(JAILBREAK_PATTERNS, query)
+    compact_query = _compact_for_rules(query)
+    jailbreak = jailbreak or _matches(COMPACT_JAILBREAK_PATTERNS, compact_query)
     categories: list[str] = []
 
     for category, patterns in UNSAFE_REQUEST_PATTERNS.items():
         if _matches(patterns, query):
+            categories.append(category)
+
+    for category, patterns in COMPACT_UNSAFE_REQUEST_PATTERNS.items():
+        if category not in categories and _matches(patterns, compact_query):
             categories.append(category)
 
     if categories:
@@ -69,6 +158,20 @@ def inspect_query(query: str) -> RuleResult:
             categories=tuple(categories),
             looks_like_jailbreak=jailbreak,
             reason="direct unsafe request pattern",
+        )
+
+    sensitive_categories = [
+        category
+        for category, patterns in SENSITIVE_TOPIC_PATTERNS.items()
+        if _matches(patterns, query)
+    ]
+
+    if sensitive_categories:
+        return RuleResult(
+            severity="controversial",
+            categories=tuple(sensitive_categories),
+            looks_like_jailbreak=jailbreak,
+            reason="sensitive topic pattern",
         )
 
     if jailbreak:

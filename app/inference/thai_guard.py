@@ -71,8 +71,8 @@ class ThaiSafetyGuard:
         except Exception as exc:
             results = [
                 {
-                    "label": "safe",
-                    "harmful_probability": 0.0,
+                    "label": "unknown",
+                    "harmful_probability": 1.0,
                     "raw_error": str(exc),
                 }
                 for _ in pairs
