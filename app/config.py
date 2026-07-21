@@ -28,7 +28,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "seed": 42,
     },
     "guards": {
-        "thai_device": "cpu",
+        "thai_device": "cuda",
         "thai_batch_size": 16,
         "thai_harmful_threshold": 0.70,
     },
