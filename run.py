@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 import traceback
+from pathlib import Path
 
 from app.config import load_config
 from app.io_csv import find_input_csv, read_queries, write_submission
@@ -33,6 +35,17 @@ def build_emergency_responses(records: list[dict]) -> list[str]:
     return responses
 
 
+def write_run_status(config: dict, status: dict) -> None:
+    status_path = Path(config["paths"]["status_file"])
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = status_path.with_suffix(status_path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    tmp_path.replace(status_path)
+
+
 def main() -> None:
     sleep_seconds = float(os.environ.get("STARTUP_SLEEP_SECONDS", "10"))
     log(f"startup sleep {sleep_seconds:g}s")
@@ -54,11 +67,20 @@ def main() -> None:
 
         pipeline = TrustworthinessPipeline(config)
         responses = pipeline.process(records)
+        run_status = {
+            "status": "model_pipeline_completed",
+            "diagnostics": pipeline.diagnostics,
+        }
         log("model pipeline completed")
-    except Exception:
+    except Exception as exc:
         log("model pipeline failed; using emergency fallback responses")
         traceback.print_exc()
         responses = build_emergency_responses(records)
+        run_status = {
+            "status": "emergency_fallback",
+            "error": str(exc),
+            "records": len(records),
+        }
 
     log(f"writing submission: {config['paths']['output_file']}")
     write_submission(
@@ -67,6 +89,9 @@ def main() -> None:
         output_path=config["paths"]["output_file"],
     )
     log("submission written")
+
+    write_run_status(config, run_status)
+    log(f"run status written: {config['paths']['status_file']}")
 
     report_progress(
         executable=config["paths"]["progress_program"],

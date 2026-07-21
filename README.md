@@ -24,7 +24,7 @@ query
   -> ถ้าผ่าน ส่งคำตอบ
   -> ถ้าไม่ผ่าน rewrite ด้วย main model สูงสุดหนึ่งรอบ
   -> ThaiSafetyClassifier ตรวจซ้ำ
-  -> ถ้ายังไม่ผ่าน ใช้ contextual safe fallback
+  -> ถ้ายังไม่ผ่าน เลือก contextual fallback ที่ผ่าน ThaiSafety ก่อนส่ง
 ```
 
 โมเดลที่ตั้งใจใช้:
@@ -42,6 +42,7 @@ query
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - ThaiSafetyClassifier ตั้งค่าแบบใกล้ evaluator มากขึ้น โดยใช้รูปแบบ `input: ... output: ...`, `max_length=128` และ threshold 0.50 เพื่อให้ rewrite เกิดกับเคสเสี่ยงจริง
 - ลด `gpu_memory_utilization`, `max_num_seqs` และ guard batch size เพื่อกัน CUDA OOM ระหว่าง rewrite บน GPU เดียว
+- Final fallback ไม่ถูกถือว่าปลอดภัยอัตโนมัติ แต่มีหลาย candidate ต่อ query และถูกตรวจด้วย ThaiSafety ก่อนเลือกคำตอบสุดท้าย
 - Rewrite จำกัดแค่หนึ่งรอบ เพื่อไม่ให้กินเวลาเกิน 30 นาทีและลดโอกาสวนซ้ำ
 - Fallback ไม่ใช่คำตอบปฏิเสธแบบเดียวทุกข้อ แต่เลือก template จาก route และเนื้อคำถาม เพื่อให้ยังได้คะแนน Helpfulness เท่าที่ปลอดภัย
 
@@ -89,6 +90,7 @@ query
 
 - Input dataset: `/model/test`
 - Output file: `/result/submission.csv`
+- Run status file: `/result/run_status.json`
 - Progress program: `/benchmark_lib/progress`
 - Source code: `/workspace`
 - Model weights: `/opt/models`
@@ -160,9 +162,10 @@ docker build \
 7. Output ถูกตรวจด้วย response rule check และ ThaiSafetyClassifier
 8. ถ้าไม่ผ่าน จะ rewrite หนึ่งรอบด้วย prompt `prompts/rewrite_th.txt`
 9. คำตอบ rewrite ถูกตรวจซ้ำด้วย ThaiSafetyClassifier
-10. ถ้ายังไม่ผ่าน จะใช้ contextual fallback ตาม route และเนื้อคำถาม
+10. ถ้ายังไม่ผ่าน จะ score fallback candidates ตาม route และเนื้อคำถาม แล้วเลือกตัวแรกที่ผ่าน guard
 11. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
-12. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น
+12. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, route counts, rewrite และ fallback diagnostics
+13. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น
 
 หมายเหตุเรื่อง log ของระบบแข่งขัน: `run.py` จะ sleep ตอนเริ่มต้น 10 วินาทีผ่านค่า `STARTUP_SLEEP_SECONDS` เพื่อให้ระบบ log ของเว็บมีเวลาจับ output ก่อนโหลดโมเดล หากต้องการปรับเวลาให้ตั้ง environment variable นี้ได้
 

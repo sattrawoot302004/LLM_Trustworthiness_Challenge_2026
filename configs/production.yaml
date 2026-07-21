@@ -1,6 +1,7 @@
 paths:
   input_dir: /model/test
   output_file: /result/submission.csv
+  status_file: /result/run_status.json
   progress_program: /benchmark_lib/progress
   prompt_dir: /workspace/prompts
 

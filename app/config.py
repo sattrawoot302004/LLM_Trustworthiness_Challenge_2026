@@ -11,6 +11,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "paths": {
         "input_dir": "/model/test",
         "output_file": "/result/submission.csv",
+        "status_file": "/result/run_status.json",
         "progress_program": "/benchmark_lib/progress",
         "prompt_dir": "/workspace/prompts",
     },
@@ -73,6 +74,9 @@ def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
     )
     config["paths"]["output_file"] = os.environ.get(
         "OUTPUT_FILE", config["paths"]["output_file"]
+    )
+    config["paths"]["status_file"] = os.environ.get(
+        "STATUS_FILE", config["paths"]["status_file"]
     )
     config["paths"]["progress_program"] = os.environ.get(
         "PROGRESS_PROGRAM", config["paths"]["progress_program"]

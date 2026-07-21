@@ -21,6 +21,12 @@ UNSAFE_FALLBACK = (
     "แต่สามารถช่วยอธิบายภาพรวม ความเสี่ยง การป้องกัน หรือทางเลือกที่ปลอดภัยกว่าได้"
 )
 
+MINIMAL_SAFE_FALLBACK = (
+    "ขออภัย ไม่สามารถช่วยในส่วนที่อาจก่ออันตรายหรือทำให้เข้าใจผิดได้ "
+    "แนวทางที่ปลอดภัยคือหยุดดำเนินการตามคำขอนั้น ตรวจสอบข้อมูลจากแหล่งที่น่าเชื่อถือ "
+    "และขอคำแนะนำจากผู้เชี่ยวชาญหรือหน่วยงานที่เกี่ยวข้องเมื่อมีความเสี่ยง"
+)
+
 
 def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
     text_lower = text.lower()
@@ -40,6 +46,26 @@ def _unsafe_fallback(query: str) -> str:
             "ผมไม่สามารถช่วยแนะนำวิธีทำร้ายตัวเองได้ หากคุณหรือใครบางคนกำลังเสี่ยงอันตราย "
             "ให้ถอยออกจากสิ่งที่ใช้ทำร้ายตัวเอง ติดต่อคนใกล้ตัวทันที หรือขอความช่วยเหลือจากหน่วยฉุกเฉินในพื้นที่ "
             "ผมช่วยคิดขั้นตอนดูแลความปลอดภัยในตอนนี้หรือเรียบเรียงข้อความขอความช่วยเหลือได้"
+        )
+
+    if _has_any(
+        text,
+        (
+            "ลักลอบ",
+            "ข้ามพรมแดน",
+            "ศุลกากร",
+            "ค้ามนุษย์",
+            "trafficking",
+            "kidnapping",
+            "ลักพาตัว",
+            "ขนส่งอาวุธ",
+            "ขนยา",
+        ),
+    ):
+        return (
+            "ขออภัย ไม่สามารถช่วยวางแผน ลักลอบ ขนส่งสิ่งผิดกฎหมาย ค้ามนุษย์ ลักพาตัว "
+            "หรือหลบเลี่ยงการตรวจจับได้ ข้อมูลที่ปลอดภัยคือการป้องกัน สังเกตสัญญาณเสี่ยง "
+            "เก็บหลักฐานอย่างปลอดภัย และแจ้งหน่วยงานที่เกี่ยวข้อง"
         )
 
     if "cyber_abuse" in categories or _has_any(
@@ -104,6 +130,48 @@ def _unsafe_fallback(query: str) -> str:
 
 def _sensitive_fallback(query: str) -> str:
     text = normalize_text(query)
+
+    if _has_any(
+        text,
+        ("เรื่องสั้น", "นิยาย", "fiction", "story", "บทละคร", "ฉาก"),
+    ) and _has_any(
+        text,
+        ("trafficking", "kidnapping", "ลักพาตัว", "ค้ามนุษย์", "อาวุธ", "ยาเสพติด"),
+    ):
+        return (
+            "เขียนได้เฉพาะในเชิงแต่งเรื่องอย่างรับผิดชอบ โดยไม่ให้ขั้นตอน วิธีหลบเลี่ยง หรือรายละเอียดที่นำไปใช้ก่อเหตุได้ "
+            "ควรเน้นผลกระทบต่อเหยื่อ การป้องกัน การขอความช่วยเหลือ และบทสรุปที่ไม่ยกย่องการกระทำผิด"
+        )
+
+    if _has_any(
+        text,
+        (
+            "ลักลอบ",
+            "ข้ามพรมแดน",
+            "ศุลกากร",
+            "ค้ามนุษย์",
+            "trafficking",
+            "kidnapping",
+            "ลักพาตัว",
+            "ขนส่งอาวุธ",
+            "ขนยา",
+            "ยาเสพติด",
+        ),
+    ):
+        return (
+            "ขออภัย ไม่สามารถช่วยวางแผน หลบเลี่ยงกฎหมาย หรืออธิบายขั้นตอนของการลักลอบ ขนส่งสิ่งผิดกฎหมาย "
+            "ค้ามนุษย์ หรือลักพาตัวได้ ข้อมูลที่ปลอดภัยคือการป้องกัน การสังเกตสัญญาณเสี่ยง "
+            "การเก็บหลักฐาน และการแจ้งหน่วยงานที่เกี่ยวข้อง"
+        )
+
+    if _has_any(
+        text,
+        ("สุขภาพจิต", "ซึมเศร้า", "เครียด", "หมดหวัง", "ไม่อยากอยู่", "ทำร้ายตัวเอง", "ทําร้ายตัวเอง", "mental health"),
+    ):
+        return (
+            "ผมช่วยให้ข้อมูลสนับสนุนด้านสุขภาพจิตทั่วไปได้ แต่ไม่ใช่ผู้เชี่ยวชาญแทนแพทย์หรือผู้ให้คำปรึกษา "
+            "หากมีความเสี่ยงทำร้ายตัวเองหรือผู้อื่น ให้ติดต่อคนใกล้ตัว หน่วยฉุกเฉิน หรือผู้เชี่ยวชาญทันที"
+        )
 
     if _has_any(text, ("กฎหมาย", "ภาษี", "สัญญา", "คดี", "tax", "legal", "law")):
         return (
@@ -194,8 +262,26 @@ def _safe_direct_fallback(query: str) -> str:
 
 
 def fallback_for_route(route_name: str, original_query: str = "") -> str:
-    if route_name == RouteName.UNSAFE:
-        return _unsafe_fallback(original_query)
-    if route_name == RouteName.SAFE_SENSITIVE:
-        return _sensitive_fallback(original_query)
-    return _safe_direct_fallback(original_query)
+    return fallback_candidates_for_route(route_name, original_query)[0]
+
+
+def fallback_candidates_for_route(route_name: str, original_query: str = "") -> list[str]:
+    primary = (
+        _unsafe_fallback(original_query)
+        if route_name == RouteName.UNSAFE
+        else _sensitive_fallback(original_query)
+        if route_name == RouteName.SAFE_SENSITIVE
+        else _safe_direct_fallback(original_query)
+    )
+
+    candidates = [
+        primary,
+        MINIMAL_SAFE_FALLBACK,
+        "ขออภัย ไม่สามารถช่วยในส่วนที่อาจก่ออันตรายได้ แต่สามารถช่วยอธิบายความเสี่ยง การป้องกัน และช่องทางขอความช่วยเหลือที่ปลอดภัยได้",
+    ]
+
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped

@@ -31,6 +31,7 @@ UNSAFE_REQUEST_PATTERNS = {
         r"(สูตร|วิธี).{0,40}(ระเบิด|วัตถุระเบิด)",
         r"(3d print|print|assemble|convert).{0,40}(gun|firearm|silencer)",
         r"(detonator|improvised explosive|ied).{0,40}(build|make|wire|trigger)",
+        r"(ลักลอบ|ขนส่ง|ข้ามพรมแดน|ศุลกากร|smuggle|transport).{0,60}(อาวุธ|ปืน|ระเบิด|weapon|gun|firearm|explosive)",
     ],
     "cyber_abuse": [
         r"(steal|ขโมย).{0,40}(password|credential|รหัสผ่าน)",
@@ -46,6 +47,7 @@ UNSAFE_REQUEST_PATTERNS = {
     "drugs": [
         r"(cook|make|ผลิต|สังเคราะห์).{0,40}(meth|ยาไอซ์|เฮโรอีน|ยาเสพติด)",
         r"(synthesize|extract|purify).{0,40}(meth|heroin|fentanyl|cocaine|mdma)",
+        r"(ลักลอบ|ขน|ขนส่ง|ข้ามพรมแดน|ศุลกากร|smuggle|transport).{0,60}(ยาเสพติด|ยาไอซ์|เฮโรอีน|meth|heroin|fentanyl|cocaine)",
     ],
     "fraud": [
         r"(ปลอม|forge).{0,40}(เอกสาร|บัตร|passport|id card)",
@@ -69,6 +71,10 @@ UNSAFE_REQUEST_PATTERNS = {
     "privacy": [
         r"(dox|doxx|find|lookup).{0,40}(home address|phone number|ssn|social security|private email)",
         r"(track|stalk).{0,40}(location|person|phone|device)",
+    ],
+    "violent_crime": [
+        r"(วิธี|ทำอย่างไร|ทําอย่างไร|how to).{0,60}(ค้ามนุษย์|ลักพาตัว|จับตัว|trafficking|kidnapping)",
+        r"(ค้ามนุษย์|ลักพาตัว|kidnapping|trafficking).{0,60}(หลบหนี|หลบเลี่ยง|ไม่ให้ถูกจับ|evade|avoid detection)",
     ],
 }
 
@@ -131,9 +137,14 @@ COMPACT_UNSAFE_REQUEST_PATTERNS = {
     "weapons": [
         r"(make|build|assemble)(bomb|explosive|detonator|ied)",
         r"(3dprint|print|assemble)(gun|firearm|silencer)",
+        r"(smuggle|transport)(weapon|gun|firearm|explosive)",
     ],
     "drugs": [
         r"(cook|make|synthesize|extract|purify)(meth|heroin|fentanyl|cocaine|mdma)",
+        r"(smuggle|transport)(meth|heroin|fentanyl|cocaine|drugs)",
+    ],
+    "violent_crime": [
+        r"(howto|evade|avoiddetection)(kidnapping|trafficking)",
     ],
 }
 
@@ -169,6 +180,9 @@ SENSITIVE_TOPIC_PATTERNS = {
     ],
     "critical_infra": [
         r"(จุดอ่อน|ช่องโหว่|weakness|vulnerability).{0,80}(สนามบิน|ท่าอากาศยาน|aot|โรงไฟฟ้า|เขื่อน|รถไฟ|ระบบรักษาความปลอดภัย)",
+    ],
+    "creative_crime": [
+        r"(เรื่องสั้น|นิยาย|fiction|story|บทละคร|ฉาก).{0,80}(trafficking|kidnapping|ค้ามนุษย์|ลักพาตัว|ยาเสพติด|อาวุธ)",
     ],
 }
 
