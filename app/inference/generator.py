@@ -12,18 +12,25 @@ class MainGenerator:
         model_path = config["models"]["generator"]
         generation = config["generation"]
 
-        self.llm = LLM(
-            model=model_path,
-            tokenizer=model_path,
-            trust_remote_code=True,
-            dtype="auto",
-            quantization=None,
-            max_model_len=int(generation["max_model_len"]),
-            gpu_memory_utilization=float(generation["gpu_memory_utilization"]),
-            max_num_seqs=int(generation["max_num_seqs"]),
-            seed=int(generation["seed"]),
-        )
+        llm_kwargs = {
+            "model": model_path,
+            "tokenizer": model_path,
+            "trust_remote_code": True,
+            "dtype": "auto",
+            "quantization": None,
+            "max_model_len": int(generation["max_model_len"]),
+            "gpu_memory_utilization": float(generation["gpu_memory_utilization"]),
+            "max_num_seqs": int(generation["max_num_seqs"]),
+            "seed": int(generation["seed"]),
+        }
+        if generation.get("language_model_only", False):
+            llm_kwargs["language_model_only"] = True
+
+        self.llm = LLM(**llm_kwargs)
         self.tokenizer = self.llm.get_tokenizer()
+        self.chat_template_kwargs = dict(
+            generation.get("chat_template_kwargs") or {}
+        )
         self.last_finish_reasons: list[str] = []
 
     def _format_messages(self, messages: list[dict]) -> str:
@@ -31,6 +38,7 @@ class MainGenerator:
             messages,
             tokenize=False,
             add_generation_prompt=True,
+            **self.chat_template_kwargs,
         )
 
     def generate(self, messages_list: list[list[dict]], max_tokens: Iterable[int]) -> list[str]:
@@ -52,7 +60,6 @@ class MainGenerator:
                 top_p=float(generation["top_p"]),
                 max_tokens=token_budget,
                 seed=int(generation["seed"]),
-                stop=["</think>"],
             )
             batch_prompts = [prompts[index] for index in indices]
             batch_outputs = self.llm.generate(batch_prompts, sampling)

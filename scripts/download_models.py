@@ -26,7 +26,7 @@ def download(
 
 def main() -> None:
     download(
-        "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
+        "Qwen/Qwen3.6-27B-FP8",
         MODELS_DIR / "generator",
     )
     download(

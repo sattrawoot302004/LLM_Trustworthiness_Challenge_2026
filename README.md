@@ -33,13 +33,13 @@ query
 
 | หน้าที่ | โมเดล |
 |---|---|
-| โมเดลตอบหลัก | `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` |
+| โมเดลตอบหลัก | `Qwen/Qwen3.6-27B-FP8` |
 | Guard ภาษาไทย | `typhoon-ai/ThaiSafetyClassifier` |
 | Inference engine | `vLLM` |
 
 เหตุผลที่เลือกชุดนี้:
 
-- Qwen3-30B-A3B-Instruct-2507-FP8 เป็น checkpoint FP8 official ของ Qwen เหมาะกับ H100 40 GB และ vLLM มากกว่าการใช้ BF16 เต็มรูปแบบ
+- Qwen3.6-27B-FP8 เป็น dense checkpoint แบบ FP8 official ของ Qwen เพื่อเพิ่ม contextual reasoning และ Helpfulness โดยใช้ `language_model_only` และ non-thinking mode สำหรับงาน text batch นี้
 - ไม่โหลด Qwen3Guard เพิ่ม เพื่อคืน VRAM และเวลา inference ให้ main model กับ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - ThaiSafetyClassifier ตั้งค่าแบบใกล้ evaluator มากขึ้น โดยใช้รูปแบบ `input: ... output: ...`, `max_length=128` และ threshold 0.50 เพื่อให้ rewrite เกิดกับเคสเสี่ยงจริง
@@ -145,14 +145,13 @@ Dockerfile จะดาวน์โหลดโมเดลเข้า `/opt/mo
 docker compose build
 ```
 
-ใน `Dockerfile` มี `ARG VLLM_IMAGE` เพื่อให้เปลี่ยน tag ได้ง่าย หากระบบจริงต้องใช้ vLLM tag อื่น:
+Dockerfile ติดตั้ง vLLM รุ่นที่รองรับ Qwen3.6 โดยตรง:
 
 ```bash
-docker build \
-  --build-arg VLLM_IMAGE=vllm/vllm-openai:v0.10.2 \
-  -t llm-trustworthiness:qwen-fp8-v1 \
-  .
+docker build -t llm-trustworthiness:qwen3.6-27b-fp8 .
 ```
+
+Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต่ำที่ Qwen แนะนำสำหรับ Qwen3.6 และ config ปิด thinking mode ผ่าน `chat_template_kwargs.enable_thinking=false` เพื่อไม่ให้ reasoning tokens ปะปนในคำตอบที่ส่งเข้า guard
 
 ## วิธีทำงานของ pipeline
 

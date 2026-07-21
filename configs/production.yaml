@@ -12,15 +12,18 @@ models:
 
 generation:
   max_model_len: 8192
-  gpu_memory_utilization: 0.76
-  max_num_seqs: 8
+  gpu_memory_utilization: 0.70
+  max_num_seqs: 4
+  language_model_only: true
+  chat_template_kwargs:
+    enable_thinking: false
   temperature: 0.2
   top_p: 0.9
   seed: 42
 
 guards:
   thai_device: cuda
-  thai_batch_size: 8
+  thai_batch_size: 4
   thai_harmful_threshold: 0.50
   thai_max_length: 128
 
