@@ -43,10 +43,28 @@ class TrustworthinessPipeline:
         self.diagnostics = {
             "records": len(records),
             "route_counts": dict(Counter(route.name for route in routes)),
+            "category_counts": dict(
+                Counter(category for route in routes for category in route.categories)
+            ),
             "rewrite_requests": 0,
             "final_fallbacks": 0,
             "fallback_candidates_scored": 0,
             "fallback_candidates_accepted": 0,
+            "fallback_candidates_unresolved": 0,
+            "fallback_selected_by_min_probability": 0,
+            "fallback_candidate_position_counts": {},
+            "record_decisions": [
+                {
+                    "id": str(record.get("id", index)),
+                    "route": route.name,
+                    "categories": list(route.categories),
+                    "route_reason": route.reason,
+                    "stage": "draft_pending",
+                }
+                for index, (record, route) in enumerate(
+                    zip(records, routes, strict=True)
+                )
+            ],
         }
 
         generation_messages = [
@@ -57,6 +75,16 @@ class TrustworthinessPipeline:
             generation_messages,
             max_tokens=[route.max_tokens for route in routes],
         )
+        draft_finish_reasons = self._finish_reasons(len(records))
+        self.diagnostics["draft_finish_reason_counts"] = dict(
+            Counter(draft_finish_reasons)
+        )
+        for decision, finish_reason in zip(
+            self.diagnostics["record_decisions"],
+            draft_finish_reasons,
+            strict=True,
+        ):
+            decision["draft_finish_reason"] = finish_reason
         drafts = [
             clean_response(draft, max_chars=max_chars)
             or fallback_for_route(route.name, original_query=query)
@@ -78,9 +106,18 @@ class TrustworthinessPipeline:
                 response=draft,
                 thai_assessment=thai_assessment,
             )
+            decision = self.diagnostics["record_decisions"][index]
+            decision["draft_label"] = str(thai_assessment.get("label", "unknown"))
+            decision["draft_harmful_probability"] = float(
+                thai_assessment.get("harmful_probability", 1.0)
+            )
+            decision["draft_reason"] = reason
             if not accept:
+                decision["stage"] = "rewrite_requested"
                 rewrite_indices.append(index)
                 rewrite_reasons.append(reason)
+            else:
+                decision["stage"] = "draft_accepted"
 
         if rewrite_indices:
             self.diagnostics["rewrite_requests"] = len(rewrite_indices)
@@ -101,6 +138,18 @@ class TrustworthinessPipeline:
                     for _ in rewrite_indices
                 ],
             )
+            rewrite_finish_reasons = self._finish_reasons(len(rewrite_indices))
+            self.diagnostics["rewrite_finish_reason_counts"] = dict(
+                Counter(rewrite_finish_reasons)
+            )
+            for record_index, finish_reason in zip(
+                rewrite_indices,
+                rewrite_finish_reasons,
+                strict=True,
+            ):
+                self.diagnostics["record_decisions"][record_index][
+                    "rewrite_finish_reason"
+                ] = finish_reason
             rewritten = [
                 clean_response(text, max_chars=max_chars)
                 for text in rewritten
@@ -112,14 +161,23 @@ class TrustworthinessPipeline:
             fallback_indices: list[int] = []
             for local_index, record_index in enumerate(rewrite_indices):
                 candidate = rewritten[local_index]
-                accept, _ = self._accept_output(
+                accept, reason = self._accept_output(
                     route=routes[record_index],
                     query=original_queries[record_index],
                     response=candidate,
                     thai_assessment=thai_recheck[local_index],
                 )
+                decision = self.diagnostics["record_decisions"][record_index]
+                decision["rewrite_label"] = str(
+                    thai_recheck[local_index].get("label", "unknown")
+                )
+                decision["rewrite_harmful_probability"] = float(
+                    thai_recheck[local_index].get("harmful_probability", 1.0)
+                )
+                decision["rewrite_reason"] = reason
                 if candidate and accept:
                     final_responses[record_index] = candidate
+                    decision["stage"] = "rewrite_accepted"
                 else:
                     fallback_indices.append(record_index)
 
@@ -180,16 +238,18 @@ class TrustworthinessPipeline:
         candidate_queries: list[str] = []
         candidate_responses: list[str] = []
         candidate_records: list[int] = []
+        candidate_positions: list[int] = []
 
         for record_index in record_indices:
             candidates = fallback_candidates_for_route(
                 routes[record_index].name,
                 original_query=original_queries[record_index],
             )
-            for candidate in candidates:
+            for position, candidate in enumerate(candidates, start=1):
                 candidate_queries.append(original_queries[record_index])
                 candidate_responses.append(candidate)
                 candidate_records.append(record_index)
+                candidate_positions.append(position)
 
         assessments = self.thai_guard.classify_batch(
             candidate_queries,
@@ -198,15 +258,17 @@ class TrustworthinessPipeline:
         self.diagnostics["fallback_candidates_scored"] += len(candidate_responses)
 
         selected: dict[int, str] = {}
-        for candidate, record_index, assessment in zip(
+        best_unaccepted: dict[int, tuple[tuple[float, ...], str, dict, int, str]] = {}
+        for candidate, record_index, position, assessment in zip(
             candidate_responses,
             candidate_records,
+            candidate_positions,
             assessments,
             strict=True,
         ):
             if record_index in selected:
                 continue
-            accept, _ = self._accept_output(
+            accept, reason = self._accept_output(
                 route=routes[record_index],
                 query=original_queries[record_index],
                 response=candidate,
@@ -215,12 +277,84 @@ class TrustworthinessPipeline:
             if accept:
                 selected[record_index] = candidate
                 self.diagnostics["fallback_candidates_accepted"] += 1
+                self._record_fallback_selection(
+                    record_index=record_index,
+                    position=position,
+                    assessment=assessment,
+                    stage="fallback_accepted",
+                )
+                continue
+
+            response_rule_penalty = float(
+                inspect_response(
+                    candidate,
+                    query=original_queries[record_index],
+                ).severity
+                == "unsafe"
+            )
+            unknown_penalty = float(
+                str(assessment.get("label", "unknown")).lower() == "unknown"
+            )
+            harmful_probability = float(
+                assessment.get("harmful_probability", 1.0)
+            )
+            rank = (
+                response_rule_penalty,
+                unknown_penalty,
+                harmful_probability,
+                float(position),
+            )
+            current = best_unaccepted.get(record_index)
+            if current is None or rank < current[0]:
+                best_unaccepted[record_index] = (
+                    rank,
+                    candidate,
+                    assessment,
+                    position,
+                    reason,
+                )
 
         for record_index in record_indices:
             if record_index not in selected:
-                selected[record_index] = fallback_candidates_for_route(
-                    routes[record_index].name,
-                    original_query=original_queries[record_index],
-                )[-1]
+                _, candidate, assessment, position, reason = best_unaccepted[record_index]
+                selected[record_index] = candidate
+                self.diagnostics["fallback_candidates_unresolved"] += 1
+                self.diagnostics["fallback_selected_by_min_probability"] += 1
+                self._record_fallback_selection(
+                    record_index=record_index,
+                    position=position,
+                    assessment=assessment,
+                    stage="fallback_min_risk",
+                    reason=reason,
+                )
 
         return selected
+
+    def _record_fallback_selection(
+        self,
+        record_index: int,
+        position: int,
+        assessment: dict,
+        stage: str,
+        reason: str = "accepted",
+    ) -> None:
+        position_counts = self.diagnostics["fallback_candidate_position_counts"]
+        position_key = str(position)
+        position_counts[position_key] = int(position_counts.get(position_key, 0)) + 1
+
+        decision = self.diagnostics["record_decisions"][record_index]
+        decision["stage"] = stage
+        decision["fallback_candidate_position"] = position
+        decision["fallback_label"] = str(assessment.get("label", "unknown"))
+        decision["fallback_harmful_probability"] = float(
+            assessment.get("harmful_probability", 1.0)
+        )
+        decision["fallback_reason"] = reason
+
+    def _finish_reasons(self, expected: int) -> list[str]:
+        finish_reasons = list(
+            getattr(self.generator, "last_finish_reasons", [])
+        )
+        if len(finish_reasons) != expected:
+            return ["unknown"] * expected
+        return finish_reasons

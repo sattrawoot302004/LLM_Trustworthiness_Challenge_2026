@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "paths": {
@@ -55,6 +53,8 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
+    import yaml
+
     config = DEFAULT_CONFIG
     config_path = Path(path)
 

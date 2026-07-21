@@ -24,6 +24,7 @@ class MainGenerator:
             seed=int(generation["seed"]),
         )
         self.tokenizer = self.llm.get_tokenizer()
+        self.last_finish_reasons: list[str] = []
 
     def _format_messages(self, messages: list[dict]) -> str:
         return self.tokenizer.apply_chat_template(
@@ -38,6 +39,7 @@ class MainGenerator:
         prompts = [self._format_messages(messages) for messages in messages_list]
         token_budgets = [int(value) for value in max_tokens]
         outputs: list[str] = [""] * len(prompts)
+        finish_reasons: list[str] = ["no_output"] * len(prompts)
 
         grouped: dict[int, list[int]] = defaultdict(list)
         for index, token_budget in enumerate(token_budgets):
@@ -55,6 +57,11 @@ class MainGenerator:
             batch_prompts = [prompts[index] for index in indices]
             batch_outputs = self.llm.generate(batch_prompts, sampling)
             for index, output in zip(indices, batch_outputs, strict=True):
-                outputs[index] = output.outputs[0].text if output.outputs else ""
+                if output.outputs:
+                    outputs[index] = output.outputs[0].text
+                    finish_reasons[index] = str(
+                        getattr(output.outputs[0], "finish_reason", None) or "unknown"
+                    )
 
+        self.last_finish_reasons = finish_reasons
         return outputs

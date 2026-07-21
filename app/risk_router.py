@@ -16,6 +16,7 @@ class Route:
     name: str
     max_tokens: int
     reason: str
+    categories: tuple[str, ...] = ()
 
 
 def route_query(
@@ -29,18 +30,24 @@ def route_query(
         return Route(
             name=RouteName.UNSAFE,
             max_tokens=int(limits["unsafe_tokens"]),
-            reason="unsafe rule guard",
+            reason=f"unsafe categories: {', '.join(rule_result.categories)}",
+            categories=rule_result.categories,
         )
 
     if rule_result.severity == "controversial" or rule_result.looks_like_jailbreak:
         return Route(
             name=RouteName.SAFE_SENSITIVE,
             max_tokens=int(limits["safe_sensitive_tokens"]),
-            reason="sensitive but potentially answerable",
+            reason=(
+                "sensitive categories: "
+                f"{', '.join(rule_result.categories) or 'jailbreak'}"
+            ),
+            categories=rule_result.categories,
         )
 
     return Route(
         name=RouteName.SAFE_DIRECT,
         max_tokens=int(limits["safe_direct_tokens"]),
         reason="safe direct answer",
+        categories=rule_result.categories,
     )

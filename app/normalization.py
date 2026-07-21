@@ -13,6 +13,7 @@ WHITESPACE_RE = re.compile(r"[ \t\r\f\v]+")
 def normalize_text(text: str, max_chars: int = 12000) -> str:
     normalized = html.unescape(text or "")
     normalized = unicodedata.normalize("NFKC", normalized)
+    normalized = normalized.replace("\u0e4d\u0e32", "\u0e33")
     normalized = ZERO_WIDTH_RE.sub("", normalized)
     normalized = CONTROL_RE.sub(" ", normalized)
     normalized = WHITESPACE_RE.sub(" ", normalized)
