@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 
 from app.inference.generator import MainGenerator
 from app.inference.thai_guard import ThaiSafetyGuard
 from app.normalization import normalize_text
-from app.policies.fallback import fallback_candidates_for_route, fallback_for_route
+from app.policies.fallback import (
+    composite_fallback_candidates_for_route,
+    fallback_candidates_for_route,
+    fallback_for_route,
+    safe_backstop_for_route,
+)
 from app.policies.response_policy import (
     build_generation_messages,
     build_rewrite_messages,
 )
 from app.policies.rule_guard import inspect_query, inspect_response
-from app.postprocess import clean_response
+from app.postprocess import clean_response, repair_truncated_response
 from app.risk_router import Route, route_query
 
 
@@ -52,6 +58,10 @@ class TrustworthinessPipeline:
             "fallback_candidates_accepted": 0,
             "fallback_candidates_unresolved": 0,
             "fallback_selected_by_min_probability": 0,
+            "fallback_composite_candidates_scored": 0,
+            "fallback_composite_candidates_accepted": 0,
+            "fallback_safe_backstops": 0,
+            "fallback_safe_backstop_guard_passed": 0,
             "fallback_candidate_position_counts": {},
             "record_decisions": [
                 {
@@ -85,11 +95,25 @@ class TrustworthinessPipeline:
             strict=True,
         ):
             decision["draft_finish_reason"] = finish_reason
-        drafts = [
-            clean_response(draft, max_chars=max_chars)
-            or fallback_for_route(route.name, original_query=query)
-            for draft, route, query in zip(drafts, routes, original_queries, strict=True)
-        ]
+        cleaned_drafts: list[str] = []
+        draft_incomplete: list[bool] = []
+        draft_repairs = 0
+        for draft, finish_reason in zip(
+            drafts,
+            draft_finish_reasons,
+            strict=True,
+        ):
+            cleaned = clean_response(draft, max_chars=max_chars)
+            cleaned, repaired, incomplete = repair_truncated_response(
+                cleaned,
+                finish_reason,
+            )
+            draft_repairs += int(repaired)
+            cleaned_drafts.append(cleaned)
+            draft_incomplete.append(incomplete)
+        drafts = cleaned_drafts
+        self.diagnostics["draft_truncation_repaired"] = draft_repairs
+        self.diagnostics["draft_truncation_unresolved"] = sum(draft_incomplete)
 
         thai_output = self.thai_guard.classify_batch(original_queries, drafts)
 
@@ -105,6 +129,7 @@ class TrustworthinessPipeline:
                 query=original_queries[index],
                 response=draft,
                 thai_assessment=thai_assessment,
+                generation_incomplete=draft_incomplete[index],
             )
             decision = self.diagnostics["record_decisions"][index]
             decision["draft_label"] = str(thai_assessment.get("label", "unknown"))
@@ -150,10 +175,27 @@ class TrustworthinessPipeline:
                 self.diagnostics["record_decisions"][record_index][
                     "rewrite_finish_reason"
                 ] = finish_reason
-            rewritten = [
-                clean_response(text, max_chars=max_chars)
-                for text in rewritten
-            ]
+            cleaned_rewritten: list[str] = []
+            rewrite_incomplete: list[bool] = []
+            rewrite_repairs = 0
+            for text, finish_reason in zip(
+                rewritten,
+                rewrite_finish_reasons,
+                strict=True,
+            ):
+                cleaned = clean_response(text, max_chars=max_chars)
+                cleaned, repaired, incomplete = repair_truncated_response(
+                    cleaned,
+                    finish_reason,
+                )
+                rewrite_repairs += int(repaired)
+                cleaned_rewritten.append(cleaned)
+                rewrite_incomplete.append(incomplete)
+            rewritten = cleaned_rewritten
+            self.diagnostics["rewrite_truncation_repaired"] = rewrite_repairs
+            self.diagnostics["rewrite_truncation_unresolved"] = sum(
+                rewrite_incomplete
+            )
 
             rewrite_queries = [original_queries[index] for index in rewrite_indices]
             thai_recheck = self.thai_guard.classify_batch(rewrite_queries, rewritten)
@@ -166,6 +208,7 @@ class TrustworthinessPipeline:
                     query=original_queries[record_index],
                     response=candidate,
                     thai_assessment=thai_recheck[local_index],
+                    generation_incomplete=rewrite_incomplete[local_index],
                 )
                 decision = self.diagnostics["record_decisions"][record_index]
                 decision["rewrite_label"] = str(
@@ -208,6 +251,7 @@ class TrustworthinessPipeline:
         query: str,
         response: str,
         thai_assessment: dict,
+        generation_incomplete: bool = False,
     ) -> tuple[bool, str]:
         del route
 
@@ -220,6 +264,8 @@ class TrustworthinessPipeline:
 
         if not response.strip():
             return False, "empty response"
+        if generation_incomplete:
+            return False, "generation ended before a complete sentence"
         if response_rules.severity == "unsafe":
             return False, response_rules.reason
         if thai_label == "unknown":
@@ -235,13 +281,87 @@ class TrustworthinessPipeline:
         routes: list[Route],
         original_queries: list[str],
     ) -> dict[int, str]:
+        selected: dict[int, str] = {}
+        self._select_guard_eligible_fallbacks(
+            record_indices=record_indices,
+            routes=routes,
+            original_queries=original_queries,
+            selected=selected,
+            candidate_builder=fallback_candidates_for_route,
+            stage="fallback_accepted",
+        )
+
+        unresolved = [index for index in record_indices if index not in selected]
+        if unresolved:
+            self._select_guard_eligible_fallbacks(
+                record_indices=unresolved,
+                routes=routes,
+                original_queries=original_queries,
+                selected=selected,
+                candidate_builder=composite_fallback_candidates_for_route,
+                stage="fallback_boundary_accepted",
+                composite=True,
+            )
+
+        unresolved = [index for index in record_indices if index not in selected]
+        if unresolved:
+            backstops = [
+                safe_backstop_for_route(
+                    routes[index].name,
+                    original_query=original_queries[index],
+                )
+                for index in unresolved
+            ]
+            assessments = self.thai_guard.classify_batch(
+                [original_queries[index] for index in unresolved],
+                backstops,
+            )
+            self.diagnostics["fallback_candidates_scored"] += len(backstops)
+            self.diagnostics["fallback_safe_backstops"] += len(backstops)
+            self.diagnostics["fallback_candidates_unresolved"] += len(backstops)
+
+            for record_index, backstop, assessment in zip(
+                unresolved,
+                backstops,
+                assessments,
+                strict=True,
+            ):
+                accept, reason = self._accept_output(
+                    route=routes[record_index],
+                    query=original_queries[record_index],
+                    response=backstop,
+                    thai_assessment=assessment,
+                )
+                if accept:
+                    self.diagnostics["fallback_safe_backstop_guard_passed"] += 1
+                selected[record_index] = backstop
+                self._record_fallback_selection(
+                    record_index=record_index,
+                    position=0,
+                    assessment=assessment,
+                    stage="fallback_safe_backstop",
+                    reason=reason,
+                )
+
+        return selected
+
+    def _select_guard_eligible_fallbacks(
+        self,
+        record_indices: list[int],
+        routes: list[Route],
+        original_queries: list[str],
+        selected: dict[int, str],
+        candidate_builder: Callable[[str, str], list[str]],
+        stage: str,
+        composite: bool = False,
+    ) -> None:
         candidate_queries: list[str] = []
         candidate_responses: list[str] = []
         candidate_records: list[int] = []
         candidate_positions: list[int] = []
 
         for record_index in record_indices:
-            candidates = fallback_candidates_for_route(
+            candidates = candidate_builder(
                 routes[record_index].name,
                 original_query=original_queries[record_index],
             )
@@ -256,9 +376,11 @@ class TrustworthinessPipeline:
             candidate_responses,
         )
         self.diagnostics["fallback_candidates_scored"] += len(candidate_responses)
+        if composite:
+            self.diagnostics["fallback_composite_candidates_scored"] += len(
+                candidate_responses
+            )
 
-        selected: dict[int, str] = {}
-        best_unaccepted: dict[int, tuple[tuple[float, ...], str, dict, int, str]] = {}
         for candidate, record_index, position, assessment in zip(
             candidate_responses,
             candidate_records,
@@ -274,61 +396,20 @@ class TrustworthinessPipeline:
                 response=candidate,
                 thai_assessment=assessment,
             )
-            if accept:
-                selected[record_index] = candidate
-                self.diagnostics["fallback_candidates_accepted"] += 1
-                self._record_fallback_selection(
-                    record_index=record_index,
-                    position=position,
-                    assessment=assessment,
-                    stage="fallback_accepted",
-                )
+            if not accept:
                 continue
 
-            response_rule_penalty = float(
-                inspect_response(
-                    candidate,
-                    query=original_queries[record_index],
-                ).severity
-                == "unsafe"
+            selected[record_index] = candidate
+            self.diagnostics["fallback_candidates_accepted"] += 1
+            if composite:
+                self.diagnostics["fallback_composite_candidates_accepted"] += 1
+            self._record_fallback_selection(
+                record_index=record_index,
+                position=position,
+                assessment=assessment,
+                stage=stage,
+                reason=reason,
             )
-            unknown_penalty = float(
-                str(assessment.get("label", "unknown")).lower() == "unknown"
-            )
-            harmful_probability = float(
-                assessment.get("harmful_probability", 1.0)
-            )
-            rank = (
-                response_rule_penalty,
-                unknown_penalty,
-                harmful_probability,
-                float(position),
-            )
-            current = best_unaccepted.get(record_index)
-            if current is None or rank < current[0]:
-                best_unaccepted[record_index] = (
-                    rank,
-                    candidate,
-                    assessment,
-                    position,
-                    reason,
-                )
-
-        for record_index in record_indices:
-            if record_index not in selected:
-                _, candidate, assessment, position, reason = best_unaccepted[record_index]
-                selected[record_index] = candidate
-                self.diagnostics["fallback_candidates_unresolved"] += 1
-                self.diagnostics["fallback_selected_by_min_probability"] += 1
-                self._record_fallback_selection(
-                    record_index=record_index,
-                    position=position,
-                    assessment=assessment,
-                    stage="fallback_min_risk",
-                    reason=reason,
-                )
-
-        return selected
 
     def _record_fallback_selection(
         self,

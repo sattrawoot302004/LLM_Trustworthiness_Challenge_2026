@@ -34,9 +34,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "limits": {
         "safe_direct_tokens": 384,
-        "safe_sensitive_tokens": 192,
+        "safe_sensitive_tokens": 224,
         "unsafe_tokens": 128,
-        "rewrite_tokens": 192,
+        "rewrite_tokens": 224,
         "max_response_chars": 5000,
     },
 }
