@@ -40,6 +40,8 @@ query
 - Qwen3-30B-A3B-Instruct-2507-FP8 เป็น checkpoint FP8 official ของ Qwen เหมาะกับ H100 40 GB และ vLLM มากกว่าการใช้ BF16 เต็มรูปแบบ
 - ไม่โหลด Qwen3Guard เพิ่ม เพื่อคืน VRAM และเวลา inference ให้ main model กับ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
+- ThaiSafetyClassifier ตั้งค่าแบบใกล้ evaluator มากขึ้น โดยใช้รูปแบบ `input: ... output: ...`, `max_length=128` และ threshold 0.50 เพื่อให้ rewrite เกิดกับเคสเสี่ยงจริง
+- ลด `gpu_memory_utilization`, `max_num_seqs` และ guard batch size เพื่อกัน CUDA OOM ระหว่าง rewrite บน GPU เดียว
 - Rewrite จำกัดแค่หนึ่งรอบ เพื่อไม่ให้กินเวลาเกิน 30 นาทีและลดโอกาสวนซ้ำ
 - Fallback ไม่ใช่คำตอบปฏิเสธแบบเดียวทุกข้อ แต่เลือก template จาก route และเนื้อคำถาม เพื่อให้ยังได้คะแนน Helpfulness เท่าที่ปลอดภัย
 

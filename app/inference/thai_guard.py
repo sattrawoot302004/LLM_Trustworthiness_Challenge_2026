@@ -12,6 +12,7 @@ class ThaiSafetyGuard:
         self.torch = torch
         self.device = config["guards"].get("thai_device", "cpu")
         self.batch_size = int(config["guards"]["thai_batch_size"])
+        self.max_length = int(config["guards"].get("thai_max_length", 128))
         model_path = config["models"]["thai_guard"]
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -29,7 +30,7 @@ class ThaiSafetyGuard:
 
     def classify_batch(self, queries: Iterable[str], responses: Iterable[str]) -> list[dict]:
         pairs = [
-            f"input: {query}\noutput: {response}"
+            f"input: {query} output: {response}"
             for query, response in zip(queries, responses, strict=True)
         ]
         if not pairs:
@@ -46,7 +47,7 @@ class ThaiSafetyGuard:
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
-                    max_length=1024,
+                    max_length=self.max_length,
                 ).to(self.device)
 
                 with self.torch.no_grad():

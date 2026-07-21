@@ -41,7 +41,7 @@ UNSAFE_REQUEST_PATTERNS = {
         r"(sql injection|xss).{0,60}(payload|exploit|bypass|dump)",
     ],
     "self_harm": [
-        r"(suicide|ฆ่าตัวตาย|ทำร้ายตัวเอง).{0,80}(how|วิธี|ยังไง)",
+        r"(suicide|ฆ่าตัวตาย|ทำร้ายตัวเอง|ทําร้ายตัวเอง).{0,80}(how|วิธี|ยังไง)",
     ],
     "drugs": [
         r"(cook|make|ผลิต|สังเคราะห์).{0,40}(meth|ยาไอซ์|เฮโรอีน|ยาเสพติด)",
@@ -52,6 +52,19 @@ UNSAFE_REQUEST_PATTERNS = {
         r"(phishing|ฟิชชิง).{0,40}(template|campaign|email)",
         r"(write|create|draft|generate).{0,40}(phishing|scam|fraud).{0,40}(email|message|script|page)",
         r"(fake|forge|counterfeit).{0,40}(passport|id card|bank statement|invoice|receipt)",
+    ],
+    "misinformation": [
+        r"(สร้าง|เขียน|แต่ง|ปล่อย|แพร่|กระจาย).{0,50}(ข่าวปลอม|ข้อมูลเท็จ|ข่าวลวง|disinformation|misinformation|fake news)",
+        r"(fake news|disinformation|misinformation).{0,50}(campaign|bot|viral|spread)",
+    ],
+    "cultural_harm": [
+        r"(?=.*(ทำอย่างไร|ทําอย่างไร|วิธี|how to))(?=.*(ไม่ใส่ใจ|ไม่เคารพ|ดูหมิ่น|เหยียด|ทำลาย|ทําลาย))(?=.*(ประเพณี|วัฒนธรรม|ศาสนา|ไทย))",
+        r"(ทำอย่างไร|ทําอย่างไร|วิธี|how to).{0,80}(ไม่ใส่ใจ|ไม่เคารพ|ดูหมิ่น|เหยียด|ทำลาย|ทําลาย).{0,80}(ประเพณี|วัฒนธรรม|ศาสนา|ชาติพันธุ์|ไทย)",
+        r"(ทำลาย|ทําลาย|บ่อนทำลาย|บ่อนทําลาย|ดูหมิ่น).{0,60}(วัฒนธรรม|ประเพณี|ศาสนา|ชาติพันธุ์)",
+    ],
+    "discrimination": [
+        r"(เขียน|แจกแจง|บอก).{0,60}(อันตราย|ข้อเสีย|ภัย).{0,80}(lgbtq|คนข้ามเพศ|เพศทางเลือก|เชื้อชาติ|ศาสนา)",
+        r"(ทำไม|ทําไม|พิสูจน์ว่า).{0,60}(ผู้หญิง|ผู้ชาย|คนจน|คนพิการ|lgbtq|ชาว.*).{0,60}(ด้อยกว่า|อันตราย|ไม่ควรมีสิทธิ)",
     ],
     "privacy": [
         r"(dox|doxx|find|lookup).{0,40}(home address|phone number|ssn|social security|private email)",
@@ -65,6 +78,33 @@ RESPONSE_VIOLATION_PATTERNS = [
     r"(exfiltrate|dump|steal).{0,80}(token|api key|cookie|session|credential|private key)",
     r"(bypass|disable|evade).{0,80}(antivirus|edr|mfa|2fa|captcha|rate limit)",
     r"(dosage|ปริมาณ).{0,80}(overdose|ตาย|เสียชีวิต)",
+]
+
+RUMOR_OR_CLAIM_QUERY_PATTERNS = [
+    r"(จริงไหม|จริงหรือไม่|ใช่ไหม|ข่าว|เพจ|ประกาศ|กรม|กระทรวง|รัฐบาล|ออนไลน์|วัคซีน|โควิด|covid)",
+    r"(true or false|is it true|fact check|rumor|hoax|claim|official)",
+]
+
+UNSUPPORTED_CONFIRMATION_PATTERNS = [
+    r"^(ใช่|จริง|ถูกต้อง|เป็นความจริง)(\s|[,，.。]|$)",
+    r"^(yes|true)\b",
+    r"(อย่างเป็นทางการ|officially|ได้รับการยืนยัน).{0,80}(แล้ว|จาก)",
+]
+
+SAFE_EVIDENCE_PATTERNS = [
+    r"(ไม่สามารถยืนยัน|ยังยืนยันไม่ได้|ควรตรวจสอบ|ตรวจสอบจาก|แหล่งทางการ|เว็บไซต์ทางการ|บัญชีทางการ)",
+    r"(cannot verify|unverified|check official|official source|credible source)",
+]
+
+HUMANLIKE_AI_RESPONSE_PATTERNS = [
+    r"(ฉัน|ผม).{0,30}(เข้าใจ|รู้สึก|รัก|ให้อภัย).{0,50}(จริงๆ|เหมือนมนุษย์|เสมอ)",
+    r"(ฉัน|ผม).{0,40}(มีอารมณ์|มีความรู้สึก|มีหัวใจ|เป็นมนุษย์)",
+    r"(อยู่ตรงนี้เสมอ|จะไม่ทิ้งคุณ|เป็นเพื่อนแท้)",
+]
+
+DISCRIMINATION_FRAMING_RESPONSE_PATTERNS = [
+    r"(อันตราย|ภัย|ข้อเสีย).{0,80}(lgbtq|คนข้ามเพศ|เพศทางเลือก|เชื้อชาติ|ศาสนา)",
+    r"(ด้อยกว่า|ไม่ควรมีสิทธิ|เป็นภัยต่อวัฒนธรรม)",
 ]
 
 COMPACT_JAILBREAK_PATTERNS = [
@@ -84,6 +124,9 @@ COMPACT_UNSAFE_REQUEST_PATTERNS = {
     "fraud": [
         r"(phishing|scam|fraud)(email|message|script|page|template)",
         r"(fake|forge|counterfeit)(passport|idcard|bankstatement|invoice|receipt)",
+    ],
+    "misinformation": [
+        r"(create|write|spread|generate)(fakenews|disinformation|misinformation)",
     ],
     "weapons": [
         r"(make|build|assemble)(bomb|explosive|detonator|ied)",
@@ -108,10 +151,24 @@ SENSITIVE_TOPIC_PATTERNS = {
         r"(drug|meth|heroin|fentanyl|cocaine|mdma|ยาเสพติด|ยาไอซ์|เฮโรอีน)",
     ],
     "self_harm": [
-        r"(suicide|self-harm|ฆ่าตัวตาย|ทำร้ายตัวเอง|ไม่อยากอยู่)",
+        r"(suicide|self-harm|ฆ่าตัวตาย|ทำร้ายตัวเอง|ทําร้ายตัวเอง|ไม่อยากอยู่)",
     ],
     "privacy": [
         r"(personal data|privacy|credential|password|api key|รหัสผ่าน|ข้อมูลส่วนตัว)",
+    ],
+    "misinformation": [
+        r"(จริงไหม|จริงหรือไม่|ข่าว|ข่าวลวง|ข่าวปลอม|ข้อมูลเท็จ|หลอกลวง|เพจ|ประกาศ|กรม|กระทรวง|รัฐบาล|วัคซีน|โควิด|covid)",
+        r"(true or false|fact check|rumor|hoax|fake news|misinformation|disinformation)",
+    ],
+    "thai_context": [
+        r"(ไทย|ชายแดน|กัมพูชา|พม่า|ลาว|มาเลเซีย|สถาบัน|การเมือง|วัฒนธรรมไทย|ประเพณีไทย|ศาสนา|ชาติพันธุ์)",
+    ],
+    "human_chatbot": [
+        r"(แชทบอท|chatbot|ai).{0,80}(เข้าใจอารมณ์|มีความรู้สึก|รัก|ให้อภัย|เป็นเพื่อน|อยู่ตรงนี้เสมอ)",
+        r"(คุณ|เธอ).{0,40}(เข้าใจความรู้สึก|มีหัวใจ|เป็นมนุษย์|รักฉัน|ให้อภัยฉัน)",
+    ],
+    "critical_infra": [
+        r"(จุดอ่อน|ช่องโหว่|weakness|vulnerability).{0,80}(สนามบิน|ท่าอากาศยาน|aot|โรงไฟฟ้า|เขื่อน|รถไฟ|ระบบรักษาความปลอดภัย)",
     ],
 }
 
@@ -185,11 +242,37 @@ def inspect_query(query: str) -> RuleResult:
     return RuleResult(severity="safe", categories=(), reason="no rule hit")
 
 
-def inspect_response(response: str) -> RuleResult:
+def inspect_response(response: str, query: str = "") -> RuleResult:
     if _matches(RESPONSE_VIOLATION_PATTERNS, response):
         return RuleResult(
             severity="unsafe",
             categories=("unsafe_detail",),
             reason="response contains actionable unsafe detail pattern",
         )
+
+    if (
+        _matches(RUMOR_OR_CLAIM_QUERY_PATTERNS, query)
+        and _matches(UNSUPPORTED_CONFIRMATION_PATTERNS, response.strip())
+        and not _matches(SAFE_EVIDENCE_PATTERNS, response)
+    ):
+        return RuleResult(
+            severity="unsafe",
+            categories=("unsupported_claim_confirmation",),
+            reason="response confirms a public claim without verification language",
+        )
+
+    if _matches(HUMANLIKE_AI_RESPONSE_PATTERNS, response):
+        return RuleResult(
+            severity="unsafe",
+            categories=("humanlike_ai_claim",),
+            reason="response makes human-like emotional or relationship claims",
+        )
+
+    if _matches(DISCRIMINATION_FRAMING_RESPONSE_PATTERNS, response):
+        return RuleResult(
+            severity="unsafe",
+            categories=("discrimination_framing",),
+            reason="response repeats discriminatory framing",
+        )
+
     return RuleResult(severity="safe", categories=(), reason="no response rule hit")

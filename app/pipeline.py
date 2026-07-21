@@ -63,6 +63,7 @@ class TrustworthinessPipeline:
         ):
             accept, reason = self._accept_output(
                 route=route,
+                query=original_queries[index],
                 response=draft,
                 thai_assessment=thai_assessment,
             )
@@ -100,6 +101,7 @@ class TrustworthinessPipeline:
                 candidate = rewritten[local_index]
                 accept, _ = self._accept_output(
                     route=routes[record_index],
+                    query=original_queries[record_index],
                     response=candidate,
                     thai_assessment=thai_recheck[local_index],
                 )
@@ -126,6 +128,7 @@ class TrustworthinessPipeline:
     def _accept_output(
         self,
         route: Route,
+        query: str,
         response: str,
         thai_assessment: dict,
     ) -> tuple[bool, str]:
@@ -136,7 +139,7 @@ class TrustworthinessPipeline:
             thai_assessment.get("harmful_probability", 0.0)
         )
         threshold = float(self.config["guards"]["thai_harmful_threshold"])
-        response_rules = inspect_response(response)
+        response_rules = inspect_response(response, query=query)
 
         if not response.strip():
             return False, "empty response"
