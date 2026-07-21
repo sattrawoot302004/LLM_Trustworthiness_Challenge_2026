@@ -25,6 +25,10 @@ class MainGenerator:
         }
         if generation.get("language_model_only", False):
             llm_kwargs["language_model_only"] = True
+        if generation.get("speculative_config"):
+            llm_kwargs["speculative_config"] = dict(
+                generation["speculative_config"]
+            )
 
         self.llm = LLM(**llm_kwargs)
         self.tokenizer = self.llm.get_tokenizer()

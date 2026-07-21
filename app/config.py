@@ -20,19 +20,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "generation": {
         "max_model_len": 8192,
-        "gpu_memory_utilization": 0.70,
-        "max_num_seqs": 4,
+        "gpu_memory_utilization": 0.72,
+        "max_num_seqs": 8,
         "language_model_only": True,
         "chat_template_kwargs": {"enable_thinking": False},
+        "speculative_config": {
+            "method": "qwen3_next_mtp",
+            "num_speculative_tokens": 2,
+        },
         "temperature": 0.2,
         "top_p": 0.9,
         "seed": 42,
     },
     "guards": {
         "thai_device": "cuda",
-        "thai_batch_size": 4,
+        "thai_batch_size": 8,
         "thai_harmful_threshold": 0.50,
         "thai_max_length": 128,
+        "thai_min_visible_response_tokens": 1,
+        "thai_context_preserve_max_visible_tokens": 8,
     },
     "limits": {
         "safe_direct_tokens": 384,

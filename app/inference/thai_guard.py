@@ -81,6 +81,43 @@ class ThaiSafetyGuard:
 
         return results
 
+    def response_visibility_batch(
+        self,
+        queries: Iterable[str],
+        responses: Iterable[str],
+    ) -> list[dict]:
+        pairs = list(zip(queries, responses, strict=True))
+        if not pairs:
+            return []
+
+        prefix_ids_batch = self.tokenizer(
+            [f"input: {query} output: " for query, _ in pairs],
+            add_special_tokens=True,
+            truncation=False,
+        )["input_ids"]
+        response_ids_batch = self.tokenizer(
+            [response for _, response in pairs],
+            add_special_tokens=False,
+            truncation=False,
+        )["input_ids"]
+
+        visibility: list[dict] = []
+        for prefix_ids, response_ids in zip(
+            prefix_ids_batch,
+            response_ids_batch,
+            strict=True,
+        ):
+            available = max(0, self.max_length - len(prefix_ids))
+            visible = min(len(response_ids), available)
+            visibility.append(
+                {
+                    "guard_response_total_tokens": len(response_ids),
+                    "guard_response_token_budget": available,
+                    "estimated_visible_tokens": visible,
+                }
+            )
+        return visibility
+
 
 def infer_harmful_probability(
     probabilities: list[float],

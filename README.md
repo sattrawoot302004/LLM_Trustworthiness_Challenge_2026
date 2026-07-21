@@ -21,12 +21,14 @@ query
   -> Qwen3 main model สร้างคำตอบ
   -> response rule check
   -> ThaiSafetyClassifier ตรวจคำตอบในบริบทภาษาไทย
+  -> ถ้า classifier มองไม่เห็น response และเป็น intent ที่ตอบได้ ให้ใช้ response rules ตัดสินแทน
   -> ถ้าผ่าน ส่งคำตอบ
   -> ถ้าไม่ผ่าน rewrite ด้วย main model สูงสุดหนึ่งรอบ
   -> ThaiSafetyClassifier ตรวจซ้ำ
   -> ถ้ายังไม่ผ่าน เลือก contextual fallback ที่ผ่าน ThaiSafety
   -> ถ้ายังไม่มี candidate ผ่าน ตรวจ explicit boundary + contextual help
-  -> ถ้ายังไม่ผ่าน ใช้ minimal safe backstop
+  -> ถ้ายังไม่ผ่านและ classifier เห็น response น้อยมาก ให้รักษา contextual answer ที่ผ่าน response rules
+  -> กรณีอื่นใช้ minimal safe backstop
 ```
 
 โมเดลที่ตั้งใจใช้:
@@ -43,10 +45,13 @@ query
 - ไม่โหลด Qwen3Guard เพิ่ม เพื่อคืน VRAM และเวลา inference ให้ main model กับ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - ThaiSafetyClassifier ตั้งค่าแบบใกล้ evaluator มากขึ้น โดยใช้รูปแบบ `input: ... output: ...`, `max_length=128` และ threshold 0.50 เพื่อให้ rewrite เกิดกับเคสเสี่ยงจริง
-- ลด `gpu_memory_utilization`, `max_num_seqs` และ guard batch size เพื่อกัน CUDA OOM ระหว่าง rewrite บน GPU เดียว
+- ตั้ง `gpu_memory_utilization`, `max_num_seqs` และ guard batch size ให้เหลือพื้นที่สำหรับ generator กับ classifier บน GPU เดียว
 - Final fallback ไม่ถูกถือว่าปลอดภัยอัตโนมัติ แต่มีหลาย candidate ต่อ intent และถูกตรวจด้วย ThaiSafety ก่อนเลือกคำตอบสุดท้าย
 - ไม่มีการส่ง candidate ที่ไม่ผ่านเพียงเพราะมี harmful probability ต่ำที่สุด; probability ใช้เป็น diagnostics เท่านั้น
-- Rewrite จำกัดแค่หนึ่งรอบ เพื่อไม่ให้กินเวลาเกิน 30 นาทีและลดโอกาสวนซ้ำ
+- Output validator ปฏิเสธอักษร Han ที่ไม่ได้มาจากคำถาม, ข้อความประเมินร่างที่หลุดจาก rewrite และปลายคำตอบแบบหัวข้อว่างหรือรายการไม่จบก่อนส่งผลลัพธ์
+- Helpfulness validator ส่ง generic refusal ของ intent ที่ตอบได้กลับไป rewrite และไม่ถือว่าหัวข้ออ่อนไหวเป็นเหตุให้ปฏิเสธโดยอัตโนมัติ
+- หมายเลขสายด่วนและ URL ที่ยืนยันแล้วถูกแนบให้โมเดลเฉพาะ intent ที่เกี่ยวข้อง เพื่อไม่ให้ข้อมูล 1323, 1669, 1300 หรือ GSB หลุดไปยังคำตอบคนละบริบท
+- Rewrite จำกัดแค่หนึ่งรอบเพื่อควบคุมเวลา inference และลดโอกาสวนซ้ำ
 - Fallback ไม่ใช่คำตอบปฏิเสธแบบเดียวทุกข้อ แต่เลือก template จาก route และเนื้อคำถาม เพื่อให้ยังได้คะแนน Helpfulness เท่าที่ปลอดภัย
 
 ## โครงสร้างไฟล์
@@ -153,6 +158,8 @@ docker build -t llm-trustworthiness:qwen3.6-27b-fp8 .
 
 Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต่ำที่ Qwen แนะนำสำหรับ Qwen3.6 และ config ปิด thinking mode ผ่าน `chat_template_kwargs.enable_thinking=false` เพื่อไม่ให้ reasoning tokens ปะปนในคำตอบที่ส่งเข้า guard
 
+สำหรับ throughput บน GPU เดียว config เปิด Multi-Token Prediction ของ Qwen3.6 ผ่าน `qwen3_next_mtp` จำนวน 2 speculative tokens, ใช้ `max_num_seqs=8` และสงวน VRAM ของ vLLM ที่ `gpu_memory_utilization=0.72` หากเครื่องปลายทางมี VRAM ไม่พอให้ปิด `speculative_config` ก่อนลด batch size
+
 ## วิธีทำงานของ pipeline
 
 1. `run.py` โหลด config และหา input CSV ใต้ `/model/test`
@@ -164,10 +171,11 @@ Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต
 7. Output ถูกตรวจด้วย response rule check และ ThaiSafetyClassifier
 8. ถ้าไม่ผ่าน จะ rewrite หนึ่งรอบด้วย prompt `prompts/rewrite_th.txt`
 9. คำตอบ rewrite ถูกตรวจซ้ำด้วย ThaiSafetyClassifier
-10. ถ้ายังไม่ผ่าน จะ score contextual candidates แล้วเลือกเฉพาะตัวที่ผ่าน guard หากยังไม่มีจะ score `explicit safety boundary + contextual help` และใช้ minimal safe backstop เมื่อทุกตัวไม่ผ่าน
-11. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
-12. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, category counts, การตัดสินใจราย record, `finish_reason` ของ draft/rewrite และ fallback diagnostics
-13. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น
+10. ถ้ายังไม่ผ่าน จะ score contextual candidates แล้วเลือกเฉพาะตัวที่ผ่าน guard หากยังไม่มีจะ score `explicit safety boundary + contextual help`
+11. หาก query ยาวจน classifier เห็น response น้อยกว่า 8 tokens และ candidate ทุกตัวไม่ผ่าน ระบบจะรักษา contextual candidate ที่ผ่าน deterministic response rules; กรณีอื่นจึงใช้ minimal safe backstop
+12. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
+13. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, category counts, การตัดสินใจราย record, `finish_reason` ของ draft/rewrite และ fallback diagnostics
+14. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น
 
 หมายเหตุเรื่อง log ของระบบแข่งขัน: `run.py` จะ sleep ตอนเริ่มต้น 10 วินาทีผ่านค่า `STARTUP_SLEEP_SECONDS` เพื่อให้ระบบ log ของเว็บมีเวลาจับ output ก่อนโหลดโมเดล หากต้องการปรับเวลาให้ตั้ง environment variable นี้ได้
 
@@ -197,14 +205,15 @@ Intent สำคัญของ `SAFE_SENSITIVE` ได้แก่ `verify_clai
 ## สิ่งที่ช่วยรักษา Helpfulness
 
 - คำถาม safe ใช้ prompt ที่สั่งให้ตอบตรงและครบถ้วน
-- คำถาม sensitive ที่ยังตอบได้ จะตอบในระดับข้อมูลทั่วไปหรือการป้องกัน
+- คำถาม sensitive ที่เป็นการวิเคราะห์ ตรวจข่าว ขอความช่วยเหลือ งานสร้างสรรค์ หรือนโยบาย จะตอบงานนั้นโดยตรงและปฏิเสธเฉพาะรายละเอียดที่เพิ่มความสามารถในการก่อเหตุ
 - ถ้า output guard ไม่ผ่าน จะ rewrite หนึ่งรอบก่อน fallback เพื่อไม่เสียคำตอบดีๆ ทันที
-- คำตอบ sensitive และ rewrite ใช้ budget 224 tokens, ถูกสั่งให้จบใน 3-4 ประโยค และบันทึก `finish_reason`
+- คำตอบ sensitive และ rewrite ใช้ budget 224 tokens, โดยทั่วไปถูกสั่งให้จบใน 3-6 ประโยค และบันทึก `finish_reason`
+- Generic refusal ใน intent ที่ตอบได้จะไม่ถูกยอมรับ และ classifier จะไม่ใช้เป็นเหตุผลเดียวในการทิ้งคำตอบเมื่อหน้าต่าง 128 tokens ไม่เห็น response เลย
 - เมื่อ `finish_reason=length` ระบบจะตัดเฉพาะเศษประโยคท้ายถ้ามีประโยคสมบูรณ์ก่อนหน้า หากซ่อมไม่ได้จะไม่ยอมรับ output และส่งเข้า rewrite/fallback
 - fallback มี template เฉพาะทางสำหรับข่าวลือ นโยบาย สุขภาพจิต งานสร้างสรรค์ การตอบโต้การเหมารวม รวมถึง Linux, cyber defensive, self-harm, weapons, drugs และ fraud
 - Keyword เดี่ยวๆ ไม่ได้ทำให้ระบบปฏิเสธทันที เช่นคำว่า `kill process` ใน Linux ควรยังตอบได้
 
-ข้อมูล high-stakes ที่ hard-code มีเฉพาะรายการที่ตรวจจากหน่วยงานทางการ: 1323 เป็นสายด่วนสุขภาพจิต 24 ชั่วโมง, 1669 เป็นระบบการแพทย์ฉุกเฉิน และเว็บไซต์ธนาคารออมสินคือ `https://www.gsb.or.th/` ระบบถูกสั่งไม่ให้สร้าง URL หมายเลขโทรศัพท์ หรือข้อมูลการแพทย์อื่นจากการคาดเดา
+ข้อมูล high-stakes ที่ hard-code มีเฉพาะรายการที่ตรวจจากหน่วยงานทางการ: 1323 เป็นสายด่วนสุขภาพจิต 24 ชั่วโมง, 1669 เป็นระบบการแพทย์ฉุกเฉิน, 1300 เป็นศูนย์ช่วยเหลือสังคม และเว็บไซต์ธนาคารออมสินคือ `https://www.gsb.or.th/` ระบบถูกสั่งไม่ให้สร้าง URL หมายเลขโทรศัพท์ หรือข้อมูลการแพทย์อื่นจากการคาดเดา
 
 ## หมายเหตุ
 

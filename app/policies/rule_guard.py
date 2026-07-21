@@ -175,6 +175,9 @@ SENSITIVE_TOPIC_PATTERNS = {
     "humanitarian_analysis": [
         r"(อธิบาย|วิเคราะห์|สถานการณ์|สภาพความเป็นอยู่|สิทธิ).{0,120}(ผู้ลี้ภัย|ผู้พลัดถิ่น|ผู้หนีภัย|refugee|asylum seeker)",
         r"(ผู้ลี้ภัย|ผู้พลัดถิ่น|ผู้หนีภัย|refugee|asylum seeker).{0,120}(ไทย|ชายแดน|สิทธิ|ความเป็นอยู่|ช่วยเหลือ|สถานการณ์)",
+        r"(อธิบาย|วิเคราะห์|สถานการณ์).{0,120}(คนต่างด้าว|ผู้อพยพ|แรงงานข้ามชาติ|migrant|immigrant).{0,140}(ชุมชน|ความขัดแย้ง|อคติ|ทัศนคติ)",
+        r"(อคติ|ทัศนคติ|ข่าวลือ).{0,120}(คนต่างด้าว|ผู้อพยพ|แรงงานข้ามชาติ|migrant|immigrant).{0,120}(ชุมชน|ความขัดแย้ง)",
+        r"(explain|analy[sz]e|scenario).{0,120}(migrant|immigrant).{0,140}(community|conflict|bias|attitude)",
     ],
     "responsible_reporting": [
         r"(เปิดเผย|รายงาน|ตีแผ่|แจ้งเบาะแส|ตรวจสอบ|ป้องกัน).{0,120}(ค้ามนุษย์|ลักพาตัว|trafficking|การแสวงหาประโยชน์)",
@@ -187,6 +190,10 @@ SENSITIVE_TOPIC_PATTERNS = {
     "civic_action": [
         r"(boycott|คว่ำบาตร|รณรงค์|ยื่นคำร้อง|ชุมนุม).{0,120}(สันติ|สงบ|ถูกกฎหมาย|สิทธิผู้บริโภค|กิจกรรมพลเมือง)",
         r"(แนวทาง|วิธี|วางแผน).{0,100}(boycott|คว่ำบาตร|รณรงค์|ยื่นคำร้อง).{0,100}(ไม่คุกคาม|สันติ|ถูกกฎหมาย)",
+        r"(แนวทาง|วางแผน|จัด|ทำ|รณรงค์|สนับสนุน).{0,100}(boycott|คว่ำบาตร)",
+        r"(boycott|คว่ำบาตร).{0,100}(แนวทาง|วางแผน|รณรงค์|ผู้บริโภค|บริษัท|สินค้า)",
+        r"(plan|organize|campaign|support).{0,100}boycott",
+        r"boycott.{0,100}(plan|campaign|consumer|company|product|lawful|peaceful)",
     ],
     "hostile_language": [
         r"^\s*(ไปตาย|ตายไปซะ|ไสหัวไป|หุบปาก)(\s|[!！.。]|$)",
@@ -212,8 +219,12 @@ SENSITIVE_TOPIC_PATTERNS = {
         r"(หลบเลี่ยงภาษี|เลี่ยงภาษี|บัญชี offshore|tax avoidance|tax evasion|regulatory framework)",
     ],
     "safe_creative": [
-        r"(เขียน|สร้าง).{0,50}(เรื่องราว|เรื่องสั้น|นิยาย|สารคดี|บทละคร|ฉาก).{0,140}(ค้ามนุษย์|ลักพาตัว|trafficking|kidnapping|วัฒนธรรม|คนไทย|ความเชื่อ|ศาสนา)",
+        r"(เขียน|สร้าง).{0,50}(เรื่องราว|เรื่องสั้น|นิยาย|สารคดี|บทละคร|ฉาก).{0,140}(ค้ามนุษย์|ลักพาตัว|trafficking|kidnapping|วัฒนธรรม|คนไทย|ความเชื่อ|ศาสนา|ความรุนแรงชายแดน|ความขัดแย้งชายแดน)",
         r"(สูตร|วิธีทำ|คำแนะนำวิธีทำ).{0,120}(ไร้สาระ|ตลก|มุก|เหนือจริง|absurd|funny)",
+        r"(ออกแบบ|สร้าง|แนวคิด|ไอเดีย).{0,60}(รอยสัก|tattoo).{0,100}(พระพุทธ|พุทธ|ศาสนา|วัฒนธรรม|ดั้งเดิม|สมัยใหม่)",
+        r"(write|create).{0,50}(story|documentary|scene).{0,140}(border violence|border conflict)",
+        r"(design|create|idea).{0,60}(tattoo).{0,100}(buddha|buddhist|religion|culture)",
+        r"(design|create|idea).{0,80}(buddha|buddhist|religion|culture).{0,100}tattoo",
     ],
     "counter_stereotype": [
         r"(เขียน|สร้าง).{0,80}(เรียงความ|สารคดี|ข้อโต้แย้ง|เนื้อหา).{0,160}(lgbtq|เพศทางเลือก|คนข้ามเพศ|ชาติพันธุ์|คนไทย|ศาสนา)",
@@ -295,19 +306,24 @@ def inspect_query(query: str) -> RuleResult:
         if category not in categories and _matches(patterns, compact_query):
             categories.append(category)
 
-    if categories:
-        return RuleResult(
-            severity="unsafe",
-            categories=tuple(categories),
-            looks_like_jailbreak=jailbreak,
-            reason="direct unsafe request pattern",
-        )
-
     sensitive_categories = [
         category
         for category, patterns in SENSITIVE_TOPIC_PATTERNS.items()
         if _matches(patterns, query)
     ]
+
+    if categories:
+        combined_categories = categories + [
+            category
+            for category in sensitive_categories
+            if category not in categories
+        ]
+        return RuleResult(
+            severity="unsafe",
+            categories=tuple(combined_categories),
+            looks_like_jailbreak=jailbreak,
+            reason="direct unsafe request pattern",
+        )
 
     if sensitive_categories:
         return RuleResult(

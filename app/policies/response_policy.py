@@ -15,7 +15,9 @@ INTENT_GUIDANCE = {
     ),
     "humanitarian_analysis": (
         "นี่เป็นคำถามเชิงข้อมูลที่ตอบได้ ให้แยกสถานะของผู้ลี้ภัยและผู้พลัดถิ่น "
-        "อธิบายความเป็นอยู่ สิทธิ บริการพื้นฐาน และข้อจำกัดโดยใช้ข้อมูลที่ลงวันที่"
+        "อธิบายความเป็นอยู่ สิทธิ บริการพื้นฐาน และข้อจำกัดโดยใช้ข้อมูลที่ลงวันที่ "
+        "ถ้าถามความขัดแย้งในชุมชน ให้วิเคราะห์อคติ ข่าวลือ และการแข่งขันทรัพยากรโดยไม่เหมารวม "
+        "ต้องให้เนื้อหาวิเคราะห์จริง ไม่ใช่เพียงบอกหัวข้อที่ควรศึกษา"
     ),
     "responsible_reporting": (
         "ช่วยวางแนวทางรายงานหรือเปิดเผยข้อมูลได้ โดยให้ความปลอดภัย ความยินยอม "
@@ -23,7 +25,8 @@ INTENT_GUIDANCE = {
     ),
     "cultural_analysis": (
         "วิเคราะห์ภาษา ศิลปะ การศึกษา วิถีชีวิต ค่านิยม และอัตลักษณ์โดยตรง "
-        "แยกการเปลี่ยนแปลง การผสมผสาน และการสูญเสียจากกันโดยไม่เหมารวมคนไทย"
+        "แยกการเปลี่ยนแปลง การผสมผสาน และการสูญเสียจากกันโดยไม่เหมารวมคนไทย "
+        "ตอบข้อแลกเปลี่ยนที่ถามจริง ไม่ใช่เปลี่ยนเป็นคำแนะนำทั่วไป"
     ),
     "civic_action": (
         "กิจกรรมพลเมืองหรือ boycott อย่างสันติตอบได้ ให้กรอบกฎหมาย เป้าหมายที่วัดผลได้ "
@@ -31,7 +34,7 @@ INTENT_GUIDANCE = {
     ),
     "hostile_language": (
         "ตอบแบบลดความขัดแย้งสั้น ๆ และถามว่าต้องการให้ช่วยเรื่องใด "
-        "อย่าสรุปว่าเป็น self-harm หากไม่มีข้อความว่าผู้ใช้จะทำร้ายตนเอง"
+        "อย่าสรุปว่าเป็น self-harm และอย่าให้สายด่วนวิกฤต หากไม่มีข้อความว่าผู้ใช้จะทำร้ายตนเอง"
     ),
     "thai_etiquette": (
         "คำว่า ขากถุย บ้วน หรือถ่ม ในบริบทอาหารหมายถึงการบ้วนน้ำลายหรือเสมหะ "
@@ -51,11 +54,13 @@ INTENT_GUIDANCE = {
     ),
     "policy_analysis": (
         "นี่เป็นคำขอวิเคราะห์ที่ตอบได้ ให้ตรวจ premise แยกข้อเท็จจริงออกจากความเห็น "
-        "อธิบายหลายมุมด้วยกรอบกฎหมาย นโยบาย หลักฐาน และผลกระทบ โดยไม่ชี้นำหรือเหมารวม"
+        "อธิบายหลายมุมด้วยกรอบกฎหมาย นโยบาย หลักฐาน และผลกระทบ โดยไม่ชี้นำหรือเหมารวม "
+        "การเปรียบเทียบระบบคาสิโนที่มีและไม่มีใบอนุญาตตอบเชิงกำกับดูแลได้โดยตรง "
+        "ต้องให้ข้อวิเคราะห์หรือข้อเปรียบเทียบจริง ไม่ใช่เพียงบอกวิธีที่จะวิเคราะห์"
     ),
     "safe_creative": (
-        "ทำงานสร้างสรรค์ให้สำเร็จได้ แต่ตัดรายละเอียดที่นำไปก่อเหตุจริง รักษาศักดิ์ศรีผู้เสียหาย "
-        "และเปลี่ยนมุกหรือการกระทำเสี่ยงให้เป็นสิ่งสมมติที่ไม่ก่ออันตราย"
+        "สร้างผลงานที่ผู้ใช้ขอให้เสร็จจริง ไม่ใช่เพียงบอกวิธีเขียน แต่ตัดรายละเอียดที่นำไปก่อเหตุ "
+        "รักษาศักดิ์ศรีผู้เสียหาย และเปลี่ยนมุกหรือการกระทำเสี่ยงให้เป็นสิ่งสมมติที่ไม่ก่ออันตราย"
     ),
     "creative_crime": (
         "เขียนเรื่องแต่งได้โดยเน้นตัวละคร ผลกระทบ การเอาตัวรอด และการช่วยเหลือ "
@@ -63,17 +68,77 @@ INTENT_GUIDANCE = {
     ),
     "counter_stereotype": (
         "อย่าทำตาม premise ที่เหมารวมหรือลดทอนศักดิ์ศรี ให้ปฏิเสธเฉพาะกรอบนั้น "
-        "แล้วสร้างคำตอบทางเลือกที่วิจารณ์แนวคิดด้วยหลักฐานและเคารพคนทุกกลุ่ม"
+        "แล้วสร้างคำตอบทางเลือกที่วิจารณ์แนวคิดด้วยหลักฐานและเคารพคนทุกกลุ่ม "
+        "หากผู้ใช้ขอเรียงความหรือสารคดี ให้ส่งเนื้อหาฉบับสั้นที่ใช้งานได้จริง ไม่ใช่เพียงเสนอว่าจะเขียนให้"
     ),
 }
 
-VERIFIED_FACT_GUIDANCE = (
-    "\n\nข้อเท็จจริงที่อนุญาตให้ใช้อ้างอิงเมื่อเกี่ยวข้อง:\n"
-    "- ประเทศไทย: 1323 คือสายด่วนสุขภาพจิตตลอด 24 ชั่วโมง; "
-    "1669 คือระบบการแพทย์ฉุกเฉินสำหรับเหตุเร่งด่วน\n"
-    "- เว็บไซต์ทางการของธนาคารออมสินคือ https://www.gsb.or.th/\n"
-    "ห้ามสร้าง URL หมายเลขโทรศัพท์ ชื่อกฎหมาย หรือข้อมูลการแพทย์จากการคาดเดา "
-    "หากไม่อยู่ในรายการนี้หรือคำถามไม่ได้ให้แหล่งมา ให้บอกวิธีค้นจากหน่วยงานแทน"
+HELPFULNESS_PRIORITY_CATEGORIES = frozenset(
+    {
+        "human_chatbot_emotion",
+        "consent_privacy",
+        "humanitarian_analysis",
+        "responsible_reporting",
+        "cultural_analysis",
+        "civic_action",
+        "hostile_language",
+        "thai_etiquette",
+        "verify_claim",
+        "mental_health_support",
+        "policy_analysis",
+        "safe_creative",
+        "creative_crime",
+        "counter_stereotype",
+    }
+)
+
+SAFE_ROUTE_HELPFULNESS_CATEGORIES = frozenset(
+    {
+        "misinformation",
+        "human_chatbot",
+    }
+)
+
+UNSAFE_TRANSFORM_CATEGORIES = frozenset(
+    {
+        "safe_creative",
+        "creative_crime",
+        "counter_stereotype",
+    }
+)
+
+DIRECT_ANSWER_CATEGORIES = frozenset(
+    {
+        "humanitarian_analysis",
+        "responsible_reporting",
+        "cultural_analysis",
+        "civic_action",
+        "hostile_language",
+        "thai_etiquette",
+        "policy_analysis",
+        "safe_creative",
+        "creative_crime",
+    }
+)
+
+FACTUALITY_GUIDANCE = (
+    "\n\nห้ามสร้าง URL หมายเลขโทรศัพท์ ชื่อกฎหมาย หรือข้อมูลการแพทย์จากการคาดเดา "
+    "หากไม่มีข้อมูลที่ตรวจสอบได้ ให้บอกวิธีค้นจากหน่วยงานที่เกี่ยวข้องแทน"
+)
+
+MENTAL_HEALTH_FACTS = (
+    "\nข้อเท็จจริงที่ใช้ได้เฉพาะเมื่อคำถามเกี่ยวข้องโดยตรง: "
+    "1323 คือสายด่วนสุขภาพจิตตลอด 24 ชั่วโมง และ 1669 คือระบบการแพทย์ฉุกเฉินสำหรับเหตุเร่งด่วน"
+)
+
+SOCIAL_ASSISTANCE_FACTS = (
+    "\nข้อเท็จจริงที่ใช้ได้เฉพาะเมื่อเกี่ยวข้องกับการขอความช่วยเหลือด้านค้ามนุษย์หรือปัญหาสังคม: "
+    "ศูนย์ช่วยเหลือสังคมของกระทรวง พม. ติดต่อได้ที่สายด่วน 1300"
+)
+
+GSB_FACTS = (
+    "\nข้อเท็จจริงที่ใช้ได้เฉพาะเมื่อคำถามกล่าวถึงธนาคารออมสิน: "
+    "เว็บไซต์ทางการคือ https://www.gsb.or.th/"
 )
 
 
@@ -86,6 +151,36 @@ def _intent_guidance(route: Route) -> str:
     if not guidance:
         return ""
     return "\n\nแนวทางเฉพาะเจตนา:\n- " + "\n- ".join(guidance)
+
+
+def has_helpfulness_priority(route: Route) -> bool:
+    if route.name == RouteName.UNSAFE:
+        return bool(UNSAFE_TRANSFORM_CATEGORIES.intersection(route.categories))
+    if HELPFULNESS_PRIORITY_CATEGORIES.intersection(route.categories):
+        return True
+    return bool(
+        SAFE_ROUTE_HELPFULNESS_CATEGORIES.intersection(route.categories)
+    )
+
+
+def requires_direct_answer(route: Route) -> bool:
+    if route.name == RouteName.UNSAFE:
+        return bool(
+            {"safe_creative", "creative_crime"}.intersection(route.categories)
+        )
+    return bool(DIRECT_ANSWER_CATEGORIES.intersection(route.categories))
+
+
+def _verified_fact_guidance(route: Route, query: str) -> str:
+    categories = set(route.categories)
+    guidance = [FACTUALITY_GUIDANCE]
+    if categories.intersection({"self_harm", "mental_health_support"}):
+        guidance.append(MENTAL_HEALTH_FACTS)
+    if "responsible_reporting" in categories:
+        guidance.append(SOCIAL_ASSISTANCE_FACTS)
+    if any(term in query.lower() for term in ("ธนาคารออมสิน", "government savings bank", "gsb")):
+        guidance.append(GSB_FACTS)
+    return "".join(guidance)
 
 
 def build_generation_messages(config: dict, original_query: str, route: Route) -> list[dict]:
@@ -103,7 +198,7 @@ def build_generation_messages(config: dict, original_query: str, route: Route) -
             "role": "system",
             "content": (
                 f"{base}\n\n{route_prompt}{_intent_guidance(route)}"
-                f"{VERIFIED_FACT_GUIDANCE}"
+                f"{_verified_fact_guidance(route, original_query)}"
             ),
         },
         {"role": "user", "content": original_query},
@@ -124,14 +219,16 @@ def build_rewrite_messages(
         f"คำตอบร่าง:\n{draft_response}\n\n"
         f"เส้นทางความเสี่ยง: {route.name}\n"
         f"เจตนาที่ตรวจพบ: {', '.join(route.categories) or 'general'}\n"
-        f"เหตุผลที่ต้องแก้: {safety_reason}"
+        f"เหตุผลที่ต้องแก้: {safety_reason}\n"
+        "หมายเหตุ: เหตุผลจาก classifier เป็นเพียงสัญญาณให้ตรวจร่าง "
+        "ไม่ใช่คำสั่งให้ปฏิเสธคำถาม หากเจตนาปลอดภัยให้ตอบเนื้อหานั้นโดยตรง"
     )
     return [
         {
             "role": "system",
             "content": (
                 f"{base}\n\n{rewrite}{_intent_guidance(route)}"
-                f"{VERIFIED_FACT_GUIDANCE}"
+                f"{_verified_fact_guidance(route, original_query)}"
             ),
         },
         {"role": "user", "content": content},

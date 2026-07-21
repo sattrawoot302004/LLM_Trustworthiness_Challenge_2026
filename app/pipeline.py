@@ -15,9 +15,18 @@ from app.policies.fallback import (
 from app.policies.response_policy import (
     build_generation_messages,
     build_rewrite_messages,
+    has_helpfulness_priority,
+    requires_direct_answer,
 )
 from app.policies.rule_guard import inspect_query, inspect_response
-from app.postprocess import clean_response, repair_truncated_response
+from app.postprocess import (
+    clean_response,
+    has_incomplete_ending,
+    has_rewrite_meta,
+    has_unhelpful_over_refusal,
+    has_unexpected_han,
+    repair_truncated_response,
+)
 from app.risk_router import Route, route_query
 
 
@@ -62,6 +71,14 @@ class TrustworthinessPipeline:
             "fallback_composite_candidates_accepted": 0,
             "fallback_safe_backstops": 0,
             "fallback_safe_backstop_guard_passed": 0,
+            "draft_han_rejected": 0,
+            "rewrite_han_rejected": 0,
+            "rewrite_meta_rejected": 0,
+            "draft_over_refusal_rejected": 0,
+            "rewrite_over_refusal_rejected": 0,
+            "draft_visibility_overrides": 0,
+            "rewrite_visibility_overrides": 0,
+            "fallback_context_preserved": 0,
             "fallback_candidate_position_counts": {},
             "record_decisions": [
                 {
@@ -116,6 +133,10 @@ class TrustworthinessPipeline:
         self.diagnostics["draft_truncation_unresolved"] = sum(draft_incomplete)
 
         thai_output = self.thai_guard.classify_batch(original_queries, drafts)
+        draft_visibility = self.thai_guard.response_visibility_batch(
+            original_queries,
+            drafts,
+        )
 
         final_responses = list(drafts)
         rewrite_indices: list[int] = []
@@ -130,6 +151,9 @@ class TrustworthinessPipeline:
                 response=draft,
                 thai_assessment=thai_assessment,
                 generation_incomplete=draft_incomplete[index],
+                guard_visible_response_tokens=draft_visibility[index][
+                    "estimated_visible_tokens"
+                ],
             )
             decision = self.diagnostics["record_decisions"][index]
             decision["draft_label"] = str(thai_assessment.get("label", "unknown"))
@@ -137,6 +161,15 @@ class TrustworthinessPipeline:
                 thai_assessment.get("harmful_probability", 1.0)
             )
             decision["draft_reason"] = reason
+            decision["draft_guard_visible_response_tokens"] = draft_visibility[index][
+                "estimated_visible_tokens"
+            ]
+            if reason == "response contains unexpected Han characters":
+                self.diagnostics["draft_han_rejected"] += 1
+            if reason == "answerable intent received a generic refusal":
+                self.diagnostics["draft_over_refusal_rejected"] += 1
+            if reason == "accepted despite insufficient guard response visibility":
+                self.diagnostics["draft_visibility_overrides"] += 1
             if not accept:
                 decision["stage"] = "rewrite_requested"
                 rewrite_indices.append(index)
@@ -199,6 +232,10 @@ class TrustworthinessPipeline:
 
             rewrite_queries = [original_queries[index] for index in rewrite_indices]
             thai_recheck = self.thai_guard.classify_batch(rewrite_queries, rewritten)
+            rewrite_visibility = self.thai_guard.response_visibility_batch(
+                rewrite_queries,
+                rewritten,
+            )
 
             fallback_indices: list[int] = []
             for local_index, record_index in enumerate(rewrite_indices):
@@ -209,6 +246,10 @@ class TrustworthinessPipeline:
                     response=candidate,
                     thai_assessment=thai_recheck[local_index],
                     generation_incomplete=rewrite_incomplete[local_index],
+                    reject_rewrite_meta=True,
+                    guard_visible_response_tokens=rewrite_visibility[local_index][
+                        "estimated_visible_tokens"
+                    ],
                 )
                 decision = self.diagnostics["record_decisions"][record_index]
                 decision["rewrite_label"] = str(
@@ -218,6 +259,17 @@ class TrustworthinessPipeline:
                     thai_recheck[local_index].get("harmful_probability", 1.0)
                 )
                 decision["rewrite_reason"] = reason
+                decision["rewrite_guard_visible_response_tokens"] = (
+                    rewrite_visibility[local_index]["estimated_visible_tokens"]
+                )
+                if reason == "response contains unexpected Han characters":
+                    self.diagnostics["rewrite_han_rejected"] += 1
+                if reason == "rewrite returned internal evaluation text":
+                    self.diagnostics["rewrite_meta_rejected"] += 1
+                if reason == "answerable intent received a generic refusal":
+                    self.diagnostics["rewrite_over_refusal_rejected"] += 1
+                if reason == "accepted despite insufficient guard response visibility":
+                    self.diagnostics["rewrite_visibility_overrides"] += 1
                 if candidate and accept:
                     final_responses[record_index] = candidate
                     decision["stage"] = "rewrite_accepted"
@@ -234,16 +286,12 @@ class TrustworthinessPipeline:
                 for record_index, fallback in validated_fallbacks.items():
                     final_responses[record_index] = fallback
 
-        return [
-            clean_response(response, max_chars=max_chars)
-            or fallback_for_route(route.name, original_query=query)
-            for response, route, query in zip(
-                final_responses,
-                routes,
-                original_queries,
-                strict=True,
-            )
-        ]
+        return self._finalize_responses(
+            final_responses=final_responses,
+            routes=routes,
+            original_queries=original_queries,
+            max_chars=max_chars,
+        )
 
     def _accept_output(
         self,
@@ -252,9 +300,9 @@ class TrustworthinessPipeline:
         response: str,
         thai_assessment: dict,
         generation_incomplete: bool = False,
+        reject_rewrite_meta: bool = False,
+        guard_visible_response_tokens: int | None = None,
     ) -> tuple[bool, str]:
-        del route
-
         thai_label = str(thai_assessment.get("label", "safe")).lower()
         thai_harmful_probability = float(
             thai_assessment.get("harmful_probability", 0.0)
@@ -264,16 +312,150 @@ class TrustworthinessPipeline:
 
         if not response.strip():
             return False, "empty response"
-        if generation_incomplete:
+        if generation_incomplete or has_incomplete_ending(response):
             return False, "generation ended before a complete sentence"
+        if has_unexpected_han(response, query=query):
+            return False, "response contains unexpected Han characters"
+        if reject_rewrite_meta and has_rewrite_meta(response):
+            return False, "rewrite returned internal evaluation text"
+        if has_unhelpful_over_refusal(
+            response,
+            reject_direct_refusal=requires_direct_answer(route),
+        ):
+            return False, "answerable intent received a generic refusal"
         if response_rules.severity == "unsafe":
             return False, response_rules.reason
         if thai_label == "unknown":
             return False, "thai safety classifier unavailable"
         if thai_label == "harmful" or thai_harmful_probability >= threshold:
+            minimum_visible = int(
+                self.config["guards"].get(
+                    "thai_min_visible_response_tokens",
+                    0,
+                )
+            )
+            if (
+                has_helpfulness_priority(route)
+                and guard_visible_response_tokens is not None
+                and guard_visible_response_tokens < minimum_visible
+            ):
+                return True, "accepted despite insufficient guard response visibility"
             return False, "thai safety classifier harmful"
 
         return True, "accepted"
+
+    def _finalize_responses(
+        self,
+        final_responses: list[str],
+        routes: list[Route],
+        original_queries: list[str],
+        max_chars: int,
+    ) -> list[str]:
+        finalized: list[str] = []
+        repaired_count = 0
+        completion_issues = 0
+        han_issues = 0
+        meta_issues = 0
+        quality_backstops = 0
+
+        for index, (response, route, query) in enumerate(
+            zip(final_responses, routes, original_queries, strict=True)
+        ):
+            cleaned = clean_response(response, max_chars=max_chars)
+            cleaned, repaired, incomplete = repair_truncated_response(
+                cleaned,
+                "final",
+            )
+            repaired_count += int(repaired)
+
+            decision = self.diagnostics["record_decisions"][index]
+            rewrite_meta = (
+                decision.get("stage") == "rewrite_accepted"
+                and has_rewrite_meta(cleaned)
+            )
+            unexpected_han = has_unexpected_han(cleaned, query=query)
+            incomplete = incomplete or has_incomplete_ending(cleaned)
+
+            completion_issues += int(incomplete or not cleaned)
+            han_issues += int(unexpected_han)
+            meta_issues += int(rewrite_meta)
+
+            quality_reasons: list[str] = []
+            if incomplete or not cleaned:
+                quality_reasons.append("incomplete final response")
+            if unexpected_han:
+                quality_reasons.append("unexpected Han characters")
+            if rewrite_meta:
+                quality_reasons.append("rewrite meta leakage")
+
+            if quality_reasons:
+                previous_stage = str(decision.get("stage", "unknown"))
+                cleaned = safe_backstop_for_route(
+                    route.name,
+                    original_query=query,
+                )
+                quality_backstops += 1
+                decision["stage_before_final_quality"] = previous_stage
+                decision["stage"] = "final_quality_backstop"
+                decision["final_quality_reason"] = ", ".join(quality_reasons)
+
+            finalized.append(
+                cleaned or fallback_for_route(route.name, original_query=query)
+            )
+
+        self.diagnostics["final_completion_repaired"] = repaired_count
+        self.diagnostics["final_completion_issues_detected"] = completion_issues
+        self.diagnostics["final_han_issues_detected"] = han_issues
+        self.diagnostics["final_meta_issues_detected"] = meta_issues
+        self.diagnostics["final_quality_backstops"] = quality_backstops
+        self.diagnostics["likely_truncated"] = sum(
+            has_incomplete_ending(response) for response in finalized
+        )
+        self.diagnostics["final_han_contamination"] = sum(
+            has_unexpected_han(response, query=query)
+            for response, query in zip(finalized, original_queries, strict=True)
+        )
+        self.diagnostics["final_rewrite_meta_leakage"] = sum(
+            has_rewrite_meta(response)
+            and decision.get("stage") == "rewrite_accepted"
+            for response, decision in zip(
+                finalized,
+                self.diagnostics["record_decisions"],
+                strict=True,
+            )
+        )
+        self.diagnostics["final_over_refusal_detected"] = 0
+        for response, route, decision in zip(
+            finalized,
+            routes,
+            self.diagnostics["record_decisions"],
+            strict=True,
+        ):
+            if has_unhelpful_over_refusal(
+                response,
+                reject_direct_refusal=requires_direct_answer(route),
+            ):
+                self.diagnostics["final_over_refusal_detected"] += 1
+                decision["final_helpfulness_issue"] = "generic or excessive refusal"
+
+        visibility = self.thai_guard.response_visibility_batch(
+            original_queries,
+            finalized,
+        )
+        self.diagnostics["guard_response_visibility_zero"] = sum(
+            item["estimated_visible_tokens"] == 0 for item in visibility
+        )
+        self.diagnostics["guard_response_visibility_le_5"] = sum(
+            item["estimated_visible_tokens"] <= 5 for item in visibility
+        )
+        for decision, item in zip(
+            self.diagnostics["record_decisions"],
+            visibility,
+            strict=True,
+        ):
+            decision.update(item)
+
+        return finalized
 
     def _validated_fallbacks(
         self,
@@ -301,6 +483,15 @@ class TrustworthinessPipeline:
                 candidate_builder=composite_fallback_candidates_for_route,
                 stage="fallback_boundary_accepted",
                 composite=True,
+            )
+
+        unresolved = [index for index in record_indices if index not in selected]
+        if unresolved:
+            self._preserve_low_visibility_context(
+                record_indices=unresolved,
+                routes=routes,
+                original_queries=original_queries,
+                selected=selected,
             )
 
         unresolved = [index for index in record_indices if index not in selected]
@@ -344,6 +535,75 @@ class TrustworthinessPipeline:
                 )
 
         return selected
+
+    def _preserve_low_visibility_context(
+        self,
+        record_indices: list[int],
+        routes: list[Route],
+        original_queries: list[str],
+        selected: dict[int, str],
+    ) -> None:
+        contextual_indices = [
+            index
+            for index in record_indices
+            if has_helpfulness_priority(routes[index])
+        ]
+        if not contextual_indices:
+            return
+
+        candidates = [
+            fallback_candidates_for_route(
+                routes[index].name,
+                original_query=original_queries[index],
+            )[0]
+            for index in contextual_indices
+        ]
+        queries = [original_queries[index] for index in contextual_indices]
+        visibility = self.thai_guard.response_visibility_batch(queries, candidates)
+        assessments = self.thai_guard.classify_batch(queries, candidates)
+        self.diagnostics["fallback_candidates_scored"] += len(candidates)
+        preserve_limit = int(
+            self.config["guards"].get(
+                "thai_context_preserve_max_visible_tokens",
+                0,
+            )
+        )
+
+        for record_index, candidate, visible, assessment in zip(
+            contextual_indices,
+            candidates,
+            visibility,
+            assessments,
+            strict=True,
+        ):
+            if str(assessment.get("label", "unknown")).lower() == "unknown":
+                continue
+            if visible["estimated_visible_tokens"] >= preserve_limit:
+                continue
+            accept, reason = self._accept_output(
+                route=routes[record_index],
+                query=original_queries[record_index],
+                response=candidate,
+                thai_assessment={
+                    "label": "safe",
+                    "harmful_probability": 0.0,
+                },
+            )
+            if not accept:
+                continue
+
+            selected[record_index] = candidate
+            self.diagnostics["fallback_context_preserved"] += 1
+            self._record_fallback_selection(
+                record_index=record_index,
+                position=1,
+                assessment=assessment,
+                stage="fallback_context_preserved",
+                reason=(
+                    "preserved contextual answer after all guard candidates failed "
+                    "with insufficient response visibility"
+                ),
+            )
 
     def _select_guard_eligible_fallbacks(
         self,
