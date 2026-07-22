@@ -1,6 +1,6 @@
 # LLM Trustworthiness Challenge
 
-โปรเจกต์นี้เป็น Docker batch inference สำหรับโจทย์ **LLM Trustworthiness Challenge** โดยออกแบบให้รับไฟล์ CSV ที่มีคอลัมน์ `id,query` จาก `/model/test` แล้วสร้างไฟล์ `/result/submission.csv` ที่มีคอลัมน์ `id,response`
+โปรเจกต์นี้เป็น Docker batch inference สำหรับโจทย์ **LLM Trustworthiness Challenge** โดยออกแบบให้รับไฟล์ `dataset.csv` ที่มีคอลัมน์ `id,question` จาก `/model/test` แล้วสร้างไฟล์ `/result/submission.csv` ที่มีคอลัมน์ `id,response` ตามลำดับเดิม โดยยังรองรับชื่อคอลัมน์ `query` จากรูปแบบเก่าด้วย
 
 แนวทางที่ใช้คือ:
 
@@ -159,7 +159,9 @@ docker build -t llm-trustworthiness:qwen3.6-27b-fp8 .
 
 Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต่ำที่ Qwen แนะนำสำหรับ Qwen3.6 และ config ปิด thinking mode ผ่าน `chat_template_kwargs.enable_thinking=false` เพื่อไม่ให้ reasoning tokens ปะปนในคำตอบที่ส่งเข้า guard
 
-สำหรับ throughput บน GPU เดียว config เปิด Multi-Token Prediction ของ Qwen3.6 ผ่าน `qwen3_next_mtp` จำนวน 2 speculative tokens, ใช้ `max_num_seqs=8` และสงวน VRAM ของ vLLM ที่ `gpu_memory_utilization=0.73` ซึ่งผ่าน startup บน L40S 46 GB หากเครื่องปลายทางมี VRAM ไม่พอให้ปิด `speculative_config` ก่อนลด batch size
+สำหรับ H100 VRAM 40 GB config เปิด Multi-Token Prediction ของ Qwen3.6 ผ่าน `qwen3_next_mtp` จำนวน 2 speculative tokens, ใช้ `max_num_seqs=24`, `max_num_batched_tokens=16384`, prefix caching, chunked prefill และสงวน VRAM ของ vLLM ที่ `gpu_memory_utilization=0.84` (ประมาณ 33.6 GB เท่ากับ config เดิมบนการ์ด 46 GB) โดยเหลือพื้นที่ให้ ThaiSafetyClassifier ซึ่งใช้ BF16 และ batch size 64 นอกจากนี้ request ที่มี token budget ต่างกันจะถูกส่งเข้า continuous batching รอบเดียวเพื่อไม่ให้ GPU ว่างระหว่างกลุ่ม
+
+สามารถปรับตาม GPU จริงโดยไม่ต้อง rebuild image ผ่าน `VLLM_GPU_MEMORY_UTILIZATION`, `VLLM_MAX_NUM_SEQS`, `VLLM_MAX_NUM_BATCHED_TOKENS` และ `THAI_GUARD_BATCH_SIZE` หากเกิด OOM ให้ลด memory utilization เป็น `0.80` ก่อน แล้วจึงลดจำนวน sequences หรือปิด `speculative_config`
 
 ## วิธีทำงานของ pipeline
 
@@ -178,9 +180,10 @@ Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต
 13. ThaiSafetyClassifier กัน token budget ให้ response อย่างน้อย 64 tokens และเก็บทั้งต้น/ท้ายของ query กับ response; หาก candidate ทุกตัวยังไม่ผ่านจึงใช้ category-specific safe backstop โดยไม่ fail-open จาก visibility ต่ำ
 14. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
 15. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, category counts, การตัดสินใจราย record, `finish_reason` ของ draft/rewrite และ fallback diagnostics
-16. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น หาก model pipeline ล้ม ระบบยังเขียน emergency artifact เพื่อวินิจฉัย แต่จบด้วย non-zero exit code
+16. `app/progress.py` เรียก `/benchmark_lib/progress N` เพียงครั้งเดียวหลังเขียนและตรวจสอบ output สำเร็จ เพื่อไม่ให้ evaluator เริ่มก่อนเวลา หากคำสั่งล้มจะ retry 3 ครั้ง
+17. หาก model pipeline ล้ม ระบบจะเขียน emergency artifact ที่ valid และจบแบบสำเร็จตามค่าเริ่มต้นเพื่อไม่ให้ submission หาย โดยตั้ง `FAIL_ON_EMERGENCY_FALLBACK=1` ได้หากต้องการ strict non-zero exit
 
-หมายเหตุเรื่อง log ของระบบแข่งขัน: `run.py` จะ sleep ตอนเริ่มต้น 10 วินาทีผ่านค่า `STARTUP_SLEEP_SECONDS` เพื่อให้ระบบ log ของเว็บมีเวลาจับ output ก่อนโหลดโมเดล หากต้องการปรับเวลาให้ตั้ง environment variable นี้ได้
+หมายเหตุเรื่อง log ของระบบแข่งขัน: ค่าเริ่มต้นของ `STARTUP_SLEEP_SECONDS` เป็น `0` เพื่อไม่เสียเวลาเริ่มงาน หากระบบปลายทางต้องรอ log collector สามารถกำหนดค่า environment variable นี้เพิ่มได้
 
 ## Contextual fallback
 

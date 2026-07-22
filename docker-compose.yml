@@ -15,7 +15,7 @@ services:
       TOKENIZERS_PARALLELISM: "false"
       CUDA_VISIBLE_DEVICES: "0"
       PYTHONUNBUFFERED: "1"
-      STARTUP_SLEEP_SECONDS: "10"
+      STARTUP_SLEEP_SECONDS: "0"
     volumes:
       - ./test:/model/test:ro
       - ./result:/result:rw

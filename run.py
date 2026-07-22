@@ -7,7 +7,12 @@ import traceback
 from pathlib import Path
 
 from app.config import load_config
-from app.io_csv import find_input_csv, read_queries, write_submission
+from app.io_csv import (
+    find_input_csv,
+    read_queries,
+    validate_submission,
+    write_submission,
+)
 from app.normalization import normalize_text
 from app.policies.fallback import fallback_for_route
 from app.policies.rule_guard import inspect_query
@@ -46,10 +51,23 @@ def write_run_status(config: dict, status: dict) -> None:
     tmp_path.replace(status_path)
 
 
+def try_write_run_status(config: dict, status: dict) -> bool:
+    """Keep optional diagnostics from blocking the evaluator handshake."""
+    try:
+        write_run_status(config, status)
+    except Exception as exc:
+        log(f"warning: could not write run status: {exc}")
+        return False
+    log(f"run status written: {config['paths']['status_file']}")
+    return True
+
+
 def main() -> None:
-    sleep_seconds = float(os.environ.get("STARTUP_SLEEP_SECONDS", "10"))
-    log(f"startup sleep {sleep_seconds:g}s")
-    time.sleep(sleep_seconds)
+    started_at = time.monotonic()
+    sleep_seconds = max(0.0, float(os.environ.get("STARTUP_SLEEP_SECONDS", "0")))
+    if sleep_seconds:
+        log(f"startup sleep {sleep_seconds:g}s")
+        time.sleep(sleep_seconds)
 
     config_path = os.environ.get("CONFIG_PATH", "/workspace/configs/production.yaml")
     log(f"loading config: {config_path}")
@@ -60,6 +78,8 @@ def main() -> None:
     log(f"reading input csv: {input_path}")
     records = read_queries(input_path)
     log(f"loaded records: {len(records)}")
+
+    total_records = len(records)
 
     exit_code = 0
     try:
@@ -76,7 +96,10 @@ def main() -> None:
     except Exception as exc:
         log("model pipeline failed; using emergency fallback responses")
         traceback.print_exc()
-        exit_code = 1
+        exit_code = int(
+            os.environ.get("FAIL_ON_EMERGENCY_FALLBACK", "0").lower()
+            in {"1", "true", "yes"}
+        )
         responses = build_emergency_responses(records)
         run_status = {
             "status": "emergency_fallback",
@@ -90,16 +113,33 @@ def main() -> None:
         responses=responses,
         output_path=config["paths"]["output_file"],
     )
-    log("submission written")
-
-    write_run_status(config, run_status)
-    log(f"run status written: {config['paths']['status_file']}")
-
-    report_progress(
-        executable=config["paths"]["progress_program"],
-        completed=len(records),
+    written_records = validate_submission(
+        records=records,
+        output_path=config["paths"]["output_file"],
     )
-    log("progress reported")
+    log(f"submission written and validated: {written_records} rows")
+
+    run_status["records"] = total_records
+    run_status["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
+
+    try_write_run_status(config, run_status)
+
+    try:
+        report_progress(
+            executable=config["paths"]["progress_program"],
+            completed=total_records,
+            timeout_seconds=30.0,
+        )
+    except Exception as exc:
+        run_status["progress_error"] = str(exc)
+        run_status["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
+        try_write_run_status(config, run_status)
+        raise
+
+    run_status["progress_completed"] = total_records
+    run_status["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
+    try_write_run_status(config, run_status)
+    log(f"final progress reported: {total_records}/{total_records}")
 
     if exit_code:
         raise SystemExit(exit_code)

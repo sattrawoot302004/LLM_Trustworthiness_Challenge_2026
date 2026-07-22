@@ -36,8 +36,10 @@ from app.risk_router import Route, route_query
 class TrustworthinessPipeline:
     def __init__(self, config: dict) -> None:
         self.config = config
-        self.thai_guard = ThaiSafetyGuard(config)
+        # Let vLLM reserve its configured KV cache first.  Loading the guard
+        # first made vLLM startup sensitive to allocator fragmentation.
         self.generator = MainGenerator(config)
+        self.thai_guard = ThaiSafetyGuard(config)
         self.diagnostics: dict = {}
 
     def process(self, records: list[dict]) -> list[str]:

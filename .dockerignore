@@ -28,6 +28,7 @@ models/**/training_args.bin
 tests/
 docs/
 notebooks/
+tmp/
 
 *.log
 *.tmp

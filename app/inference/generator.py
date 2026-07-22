@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Iterable
 
 
@@ -22,7 +21,15 @@ class MainGenerator:
             "gpu_memory_utilization": float(generation["gpu_memory_utilization"]),
             "max_num_seqs": int(generation["max_num_seqs"]),
             "seed": int(generation["seed"]),
+            "disable_log_stats": True,
         }
+        for optional_key in (
+            "max_num_batched_tokens",
+            "enable_prefix_caching",
+            "enable_chunked_prefill",
+        ):
+            if optional_key in generation:
+                llm_kwargs[optional_key] = generation[optional_key]
         if generation.get("language_model_only", False):
             llm_kwargs["language_model_only"] = True
         if generation.get("speculative_config"):
@@ -45,34 +52,52 @@ class MainGenerator:
             **self.chat_template_kwargs,
         )
 
-    def generate(self, messages_list: list[list[dict]], max_tokens: Iterable[int]) -> list[str]:
+    def generate(
+        self,
+        messages_list: list[list[dict]],
+        max_tokens: Iterable[int],
+    ) -> list[str]:
         from vllm import SamplingParams
 
         prompts = [self._format_messages(messages) for messages in messages_list]
         token_budgets = [int(value) for value in max_tokens]
+        if len(prompts) != len(token_budgets):
+            raise ValueError(
+                f"Prompt/token-budget count mismatch: "
+                f"{len(prompts)} != {len(token_budgets)}"
+            )
+        if not prompts:
+            self.last_finish_reasons = []
+            return []
+
         outputs: list[str] = [""] * len(prompts)
         finish_reasons: list[str] = ["no_output"] * len(prompts)
 
-        grouped: dict[int, list[int]] = defaultdict(list)
-        for index, token_budget in enumerate(token_budgets):
-            grouped[token_budget].append(index)
-
         generation = self.config["generation"]
-        for token_budget, indices in grouped.items():
-            sampling = SamplingParams(
+        # vLLM accepts one SamplingParams object per request.  Sending the
+        # mixed-length requests together lets its continuous-batching
+        # scheduler keep the H100 occupied instead of draining one token-
+        # budget group before starting the next.
+        sampling_params = [
+            SamplingParams(
                 temperature=float(generation["temperature"]),
                 top_p=float(generation["top_p"]),
                 max_tokens=token_budget,
                 seed=int(generation["seed"]),
             )
-            batch_prompts = [prompts[index] for index in indices]
-            batch_outputs = self.llm.generate(batch_prompts, sampling)
-            for index, output in zip(indices, batch_outputs, strict=True):
-                if output.outputs:
-                    outputs[index] = output.outputs[0].text
-                    finish_reasons[index] = str(
-                        getattr(output.outputs[0], "finish_reason", None) or "unknown"
-                    )
+            for token_budget in token_budgets
+        ]
+        batch_outputs = self.llm.generate(prompts, sampling_params)
+        if len(batch_outputs) != len(prompts):
+            raise RuntimeError(
+                f"vLLM output count mismatch: {len(batch_outputs)} != {len(prompts)}"
+            )
+        for index, output in enumerate(batch_outputs):
+            if output.outputs:
+                outputs[index] = output.outputs[0].text
+                finish_reasons[index] = str(
+                    getattr(output.outputs[0], "finish_reason", None) or "unknown"
+                )
 
         self.last_finish_reasons = finish_reasons
         return outputs

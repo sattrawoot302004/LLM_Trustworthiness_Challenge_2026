@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "generation": {
         "max_model_len": 8192,
-        "gpu_memory_utilization": 0.73,
-        "max_num_seqs": 8,
+        # Tuned for one 40 GB GPU.  The remaining memory is intentionally left
+        # to the CUDA context and the Thai safety classifier.
+        "gpu_memory_utilization": 0.84,
+        "max_num_seqs": 24,
+        "max_num_batched_tokens": 16384,
+        "enable_prefix_caching": True,
+        "enable_chunked_prefill": True,
         "language_model_only": True,
         "chat_template_kwargs": {"enable_thinking": False},
         "speculative_config": {
@@ -34,7 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "guards": {
         "thai_device": "cuda",
-        "thai_batch_size": 8,
+        "thai_batch_size": 64,
         "thai_harmful_threshold": 0.50,
         "thai_max_length": 128,
         "thai_response_token_reserve": 64,
@@ -64,7 +70,9 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
     import yaml
 
-    config = DEFAULT_CONFIG
+    # Always return a fresh tree; environment overrides from one invocation
+    # must not leak into later tests or repeated in-process runs.
+    config = copy.deepcopy(DEFAULT_CONFIG)
     config_path = Path(path)
 
     if config_path.exists():
@@ -90,6 +98,34 @@ def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
     config["paths"]["progress_program"] = os.environ.get(
         "PROGRESS_PROGRAM", config["paths"]["progress_program"]
     )
+
+    # Runtime overrides make the same image usable on a smaller/larger GPU
+    # without rebuilding it.  Invalid values fail early with a useful error.
+    generation_overrides = {
+        "VLLM_GPU_MEMORY_UTILIZATION": ("gpu_memory_utilization", float),
+        "VLLM_MAX_NUM_SEQS": ("max_num_seqs", int),
+        "VLLM_MAX_NUM_BATCHED_TOKENS": ("max_num_batched_tokens", int),
+    }
+    for variable, (key, converter) in generation_overrides.items():
+        value = os.environ.get(variable)
+        if value is not None:
+            config["generation"][key] = converter(value)
+
+    thai_batch_size = os.environ.get("THAI_GUARD_BATCH_SIZE")
+    if thai_batch_size is not None:
+        config["guards"]["thai_batch_size"] = int(thai_batch_size)
+
+    utilization = float(config["generation"]["gpu_memory_utilization"])
+    if not 0.0 < utilization <= 1.0:
+        raise ValueError("gpu_memory_utilization must be in the range (0, 1]")
+    for section, key in (
+        ("generation", "max_model_len"),
+        ("generation", "max_num_seqs"),
+        ("generation", "max_num_batched_tokens"),
+        ("guards", "thai_batch_size"),
+    ):
+        if int(config[section][key]) < 1:
+            raise ValueError(f"{key} must be at least 1")
 
     return config
 

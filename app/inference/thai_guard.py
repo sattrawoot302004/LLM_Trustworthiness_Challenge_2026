@@ -63,17 +63,34 @@ class ThaiSafetyGuard:
             local_files_only=True,
             trust_remote_code=True,
         )
-        self.model.to(self.device)
+        if str(self.device).startswith("cuda"):
+            # The classifier is inference-only; reduced precision is much
+            # faster on H100 and leaves more KV-cache headroom for vLLM.
+            guard_dtype = (
+                self.torch.bfloat16
+                if self.torch.cuda.is_bf16_supported()
+                else self.torch.float16
+            )
+            self.model.to(device=self.device, dtype=guard_dtype)
+        else:
+            self.model.to(self.device)
         self.model.eval()
+        self.prefix_ids = self.tokenizer.encode("input: ", add_special_tokens=False)
+        self.separator_ids = self.tokenizer.encode(
+            " output: ", add_special_tokens=False
+        )
+        self._last_pairs: list[tuple[str, str]] = []
+        self._last_visibility: list[dict] = []
 
     def _prepare_pair(self, query: str, response: str) -> tuple[dict, dict]:
-        prefix_ids = self.tokenizer.encode("input: ", add_special_tokens=False)
-        separator_ids = self.tokenizer.encode(" output: ", add_special_tokens=False)
         query_ids = self.tokenizer.encode(query, add_special_tokens=False)
         response_ids = self.tokenizer.encode(response, add_special_tokens=False)
         special_tokens = self.tokenizer.num_special_tokens_to_add(pair=False)
         content_budget = (
-            self.max_length - special_tokens - len(prefix_ids) - len(separator_ids)
+            self.max_length
+            - special_tokens
+            - len(self.prefix_ids)
+            - len(self.separator_ids)
         )
         if content_budget < 1:
             raise ValueError(
@@ -88,7 +105,9 @@ class ThaiSafetyGuard:
         )
         visible_query = _head_tail(query_ids, query_budget)
         visible_response = _head_tail(response_ids, response_budget)
-        content_ids = prefix_ids + visible_query + separator_ids + visible_response
+        content_ids = (
+            self.prefix_ids + visible_query + self.separator_ids + visible_response
+        )
         encoded = self.tokenizer.prepare_for_model(
             content_ids,
             add_special_tokens=True,
@@ -117,28 +136,33 @@ class ThaiSafetyGuard:
             return []
 
         results: list[dict] = []
+        all_visibility: list[dict] = []
         threshold = float(self.config["guards"]["thai_harmful_threshold"])
 
-        try:
-            for start in range(0, len(pairs), self.batch_size):
-                batch = pairs[start : start + self.batch_size]
+        for start in range(0, len(pairs), self.batch_size):
+            batch = pairs[start : start + self.batch_size]
+            batch_visibility: list[dict] = []
+            try:
                 prepared = [
-                    self._prepare_pair(query, response)[0]
+                    self._prepare_pair(query, response)
                     for query, response in batch
                 ]
+                batch_visibility = [item[1] for item in prepared]
                 encoded = self.tokenizer.pad(
-                    prepared,
+                    [item[0] for item in prepared],
                     return_tensors="pt",
                     padding=True,
                 ).to(self.device)
 
-                with self.torch.no_grad():
+                with self.torch.inference_mode():
                     logits = self.model(**encoded).logits
-                    probabilities = self.torch.softmax(logits, dim=-1)
+                    probabilities = self.torch.softmax(
+                        logits.float(), dim=-1
+                    ).cpu()
 
-                for probs in probabilities:
+                for probs in probabilities.tolist():
                     harmful_probability = infer_harmful_probability(
-                        probs.detach().cpu().tolist(),
+                        probs,
                         getattr(self.model.config, "id2label", None),
                     )
                     results.append(
@@ -151,15 +175,32 @@ class ThaiSafetyGuard:
                             "harmful_probability": harmful_probability,
                         }
                     )
-        except Exception as exc:
-            results = [
-                {
-                    "label": "unknown",
-                    "harmful_probability": 1.0,
-                    "raw_error": str(exc),
-                }
-                for _ in pairs
-            ]
+            except Exception as exc:
+                # A malformed record must not discard successful results from
+                # every earlier batch.
+                results.extend(
+                    {
+                        "label": "unknown",
+                        "harmful_probability": 1.0,
+                        "raw_error": str(exc),
+                    }
+                    for _ in batch
+                )
+                if not batch_visibility:
+                    batch_visibility = [
+                        {
+                            "guard_query_total_tokens": 0,
+                            "guard_query_visible_tokens": 0,
+                            "guard_response_total_tokens": 0,
+                            "guard_response_token_budget": 0,
+                            "estimated_visible_tokens": 0,
+                        }
+                        for _ in batch
+                    ]
+            all_visibility.extend(batch_visibility)
+
+        self._last_pairs = pairs
+        self._last_visibility = all_visibility
 
         return results
 
@@ -172,10 +213,10 @@ class ThaiSafetyGuard:
         if not pairs:
             return []
 
-        return [
-            self._prepare_pair(query, response)[1]
-            for query, response in pairs
-        ]
+        if pairs == self._last_pairs and len(self._last_visibility) == len(pairs):
+            return [dict(item) for item in self._last_visibility]
+
+        return [self._prepare_pair(query, response)[1] for query, response in pairs]
 
 
 def infer_harmful_probability(

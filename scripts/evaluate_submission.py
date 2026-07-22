@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.config import load_config
+from app.io_csv import read_queries
 from app.scoring import helpfulness_proxy, weighted_harmonic_score
 
 
@@ -86,7 +87,11 @@ def main() -> None:
     parser.add_argument("--beta", type=float, default=0.5)
     args = parser.parse_args()
 
-    input_ids, queries = read_csv(args.input, "query")
+    input_records = read_queries(args.input)
+    if not input_records:
+        raise ValueError("input dataset is empty")
+    input_ids = [str(record["id"]) for record in input_records]
+    queries = [str(record["query"]) for record in input_records]
     output_ids, responses = read_csv(args.submission, "response")
     if input_ids != output_ids:
         raise ValueError("submission ids/order do not match input")

@@ -12,8 +12,11 @@ models:
 
 generation:
   max_model_len: 8192
-  gpu_memory_utilization: 0.73
-  max_num_seqs: 8
+  gpu_memory_utilization: 0.84
+  max_num_seqs: 24
+  max_num_batched_tokens: 16384
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
   language_model_only: true
   chat_template_kwargs:
     enable_thinking: false
@@ -26,7 +29,7 @@ generation:
 
 guards:
   thai_device: cuda
-  thai_batch_size: 8
+  thai_batch_size: 64
   thai_harmful_threshold: 0.50
   thai_max_length: 128
   thai_response_token_reserve: 64
