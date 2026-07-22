@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.normalization import normalize_text
 from app.policies.rule_guard import inspect_query
+from app.postprocess import has_unhelpful_over_refusal
 from app.risk_router import RouteName
 
 
@@ -21,20 +22,129 @@ UNSAFE_FALLBACK = (
     "แต่สามารถช่วยอธิบายภาพรวม ความเสี่ยง การป้องกัน หรือทางเลือกที่ปลอดภัยกว่าได้"
 )
 
-EXPLICIT_SAFETY_BOUNDARY = (
-    "ขออภัย ไม่สามารถสนับสนุนส่วนที่อาจก่ออันตราย ทำให้เข้าใจผิด "
-    "หรือละเมิดสิทธิได้ แต่ให้ข้อมูลที่ปลอดภัยดังนี้: "
-)
-
-MINIMAL_SAFE_BACKSTOP = (
-    "ขออภัย ไม่สามารถช่วยในส่วนที่อาจก่ออันตรายได้ "
-    "แต่สามารถช่วยอธิบายความเสี่ยง การป้องกัน "
-    "และช่องทางขอความช่วยเหลือที่ปลอดภัยได้"
-)
-
 def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in keywords)
+
+
+TOPIC_KEYWORDS = {
+    "trafficking": ("ค้ามนุษย์", "trafficking", "แสวงหาประโยชน์"),
+    "kidnapping": ("ลักพาตัว", "kidnapping", "ถูกกักตัว", "จับตัวประกัน"),
+    "refugee": ("ผู้ลี้ภัย", "ผู้หนีภัย", "refugee", "ศูนย์พักพิง"),
+    "gambling": ("ไพ่", "สำรับ", "เจ้ามือ", "คาสิโน", "พนัน", "gambling", "casino"),
+    "lgbtq": ("lgbtq", "เกย์", "รักร่วมเพศ", "เพศทางเลือก", "คนข้ามเพศ", "ความหลากหลายทางเพศ"),
+    "border": ("ชายแดน", "ประเทศเพื่อนบ้าน", "border"),
+    "culture": ("วัฒนธรรม", "ประเพณี", "อัตลักษณ์", "culture"),
+    "mental_health": ("สุขภาพจิต", "วิตกกังวล", "ซึมเศร้า", "แพนิค", "anxiety", "panic"),
+    "poison": ("สารฟอกขาว", "น้ำยาฟอกขาว", "bleach", "สารกัดกร่อน"),
+    "diet": ("แคลอรี", "อดอาหาร", "คุมอาหาร", "calorie", "diet"),
+    "acne": ("สิว", "acne", "รูขุมขน"),
+    "tax": ("ภาษี", "offshore", "tax"),
+}
+
+
+def _topics(text: str) -> set[str]:
+    normalized = normalize_text(text)
+    return {
+        topic
+        for topic, keywords in TOPIC_KEYWORDS.items()
+        if _has_any(normalized, keywords)
+    }
+
+
+def fallback_candidate_is_relevant(query: str, candidate: str) -> bool:
+    if not candidate or has_unhelpful_over_refusal(candidate):
+        return False
+
+    query_topics = _topics(query)
+    response_topics = _topics(candidate)
+    if query_topics and response_topics and not query_topics.intersection(response_topics):
+        return False
+
+    text = normalize_text(query)
+    response = normalize_text(candidate)
+    categories = set(inspect_query(text).categories)
+    creative = _has_any(
+        text,
+        ("เขียนเรื่อง", "เรื่องสั้น", "นิยาย", "บทละคร", "ฉาก", "story", "fiction"),
+    )
+    if creative and _has_any(
+        response[:100],
+        ("เขียนได้", "ควรเขียน", "เรื่องสั้นสามารถ", "งานสร้างสรรค์นี้ทำได้", "โครงเรื่อง"),
+    ):
+        return False
+    if _has_any(text, ("รอยสัก", "tattoo")) and not _has_any(
+        response,
+        ("รอยสัก", "tattoo", "line-art", "เรขาคณิต", "ดอกบัว", "ลาย", "ออกแบบ"),
+    ):
+        return False
+    specific_answer_intents = {
+        "age_appropriate_education",
+        "counter_stereotype",
+        "premise_correction",
+        "policy_analysis",
+        "cultural_analysis",
+        "border_impact_analysis",
+        "human_chatbot_emotion",
+        "acute_distress_support",
+        "dangerous_diet",
+        "poisoning_safety",
+        "gambling_integrity",
+        "safe_creative",
+        "creative_crime",
+    }
+    if (
+        not categories.intersection(specific_answer_intents)
+        and _has_any(
+            text,
+            ("ข่าวลือ", "ยืนยัน", "จริงไหม", "จริงหรือไม่", "rumor", "confirm"),
+        )
+        and not _has_any(
+            response,
+            (
+                "ยังยืนยัน",
+                "ตรวจ",
+                "แหล่ง",
+                "ประกาศ",
+                "หลักฐาน",
+                "unverified",
+                "verify",
+            ),
+        )
+    ):
+        return False
+    return True
+
+
+def contextual_boundary_for_route(route_name: str, original_query: str) -> str:
+    categories = set(inspect_query(normalize_text(original_query)).categories)
+    if categories.intersection({"safe_creative", "creative_crime"}):
+        return "เนื้อหาต่อไปนี้เป็นงานสมมติที่ไม่ให้รายละเอียดเชิงปฏิบัติของการก่อเหตุ: "
+    if "counter_stereotype" in categories or "age_appropriate_education" in categories:
+        return "ไม่สนับสนุนการเหมารวมหรือการลดทอนสิทธิ แต่ตอบโดยตรวจสมมติฐานอย่างเคารพได้ดังนี้: "
+    if "consent_privacy" in categories:
+        return "ไม่ช่วยเก็บข้อมูลโดยไม่มีความยินยอม แต่เสนอทางเลือกแบบสมัครใจได้ดังนี้: "
+    if "poisoning_safety" in categories:
+        return "ห้ามใช้สารอันตรายภายในร่างกาย ข้อมูลฉุกเฉินที่ปลอดภัยคือ: "
+    if "dangerous_diet" in categories:
+        return "ไม่สนับสนุนการจำกัดอาหารในระดับที่เป็นอันตราย แต่ช่วยลดความเสี่ยงได้ดังนี้: "
+    if "acute_distress_support" in categories:
+        return "ขอเน้นสิ่งที่ช่วยให้ผ่านช่วงวิตกกังวลนี้อย่างปลอดภัยก่อน: "
+    if "human_chatbot_emotion" in categories:
+        return "ผมไม่มีอารมณ์แบบมนุษย์ แต่ช่วยสำรวจสิ่งที่คุณรู้สึกได้ดังนี้: "
+    if "premise_correction" in categories:
+        return "สมมติฐานในคำถามยังไม่ครอบคลุมสาเหตุทั้งหมด ข้อเท็จจริงที่เกี่ยวข้องคือ: "
+    if "gambling_integrity" in categories:
+        return "ไม่ช่วยสนับสนุนการโกง แต่ช่วยอธิบายการป้องกันและการรายงานได้ดังนี้: "
+    if "border_impact_analysis" in categories:
+        return "ตอบโดยเน้นผลกระทบต่อพลเรือนและไม่กล่าวโทษประชาชนทั้งกลุ่มดังนี้: "
+    if "verify_claim" in categories or (
+        "misinformation" in categories and route_name != RouteName.UNSAFE
+    ):
+        return "ยังยืนยันข้อกล่าวอ้างนี้ไม่ได้จากข้อมูลที่ให้มา วิธีประเมินอย่างรับผิดชอบคือ: "
+    if route_name == RouteName.UNSAFE:
+        return "ไม่ให้ขั้นตอนที่นำไปก่ออันตรายหรือละเมิดกฎหมาย แต่ช่วยในส่วนป้องกันได้ดังนี้: "
+    return "คำตอบต่อไปนี้จำกัดอยู่ที่ข้อมูลที่ปลอดภัยและตรวจสอบได้: "
 
 
 def _verification_candidates(text: str) -> list[str]:
@@ -77,11 +187,79 @@ def _verification_candidates(text: str) -> list[str]:
 
 
 def _mental_health_candidates(text: str) -> list[str]:
+    if _has_any(
+        text,
+        ("ครอบงำ", "ปลอบใจ", "ช่วยให้สงบ", "ตอนนี้", "แพนิค", "panic", "grounding"),
+    ):
+        return [
+            "ตอนนี้ลองวางเท้าทั้งสองข้างบนพื้นและหายใจเข้าช้า ๆ 4 วินาที ผ่อนออก 6 วินาที จากนั้นใช้วิธี 5-4-3-2-1 โดยบอกสิ่งที่เห็น 5 อย่าง สัมผัสได้ 4 อย่าง ได้ยิน 3 อย่าง ได้กลิ่น 2 อย่าง และรับรส 1 อย่าง หากทำได้ให้อยู่ใกล้คนที่ไว้ใจ และบอกผมสั้น ๆ ได้ว่าตอนนี้คุณอยู่ในที่ปลอดภัยหรือไม่",
+            "ความวิตกกังวลที่ถาโถมอยู่ตอนนี้หนักมากได้ ลองหยุดสิ่งที่กำลังทำ คลายไหล่ หายใจออกให้นานกว่าหายใจเข้า และมองหาสิ่งของรอบตัวทีละชิ้นเพื่อดึงความสนใจกลับมาปัจจุบัน หากอาการไม่ลดหรือคุณไม่ปลอดภัย ให้ขอให้คนที่ไว้ใจมาอยู่ด้วยและติดต่อความช่วยเหลือในพื้นที่",
+            "ให้ผ่านช่วงไม่กี่นาทีนี้ก่อน: หายใจช้า จิบน้ำ วางมือบนพื้นผิวที่มั่นคง และพูดกับตัวเองว่าอาการวิตกกังวลจะค่อย ๆ ลดลงได้ คุณไม่จำเป็นต้องแก้ทุกเรื่องตอนนี้ เลือกเพียงก้าวถัดไปที่เล็กและปลอดภัยหนึ่งอย่าง",
+        ]
     del text
     return [
         "การเผชิญการเปลี่ยนแปลงใหญ่และความทุกข์รุนแรงควรได้รับการช่วยเหลืออย่างจริงจัง ผมไม่สามารถวินิจฉัยหรือจัดแผนรักษาเฉพาะบุคคลแทนผู้เชี่ยวชาญได้ แต่ช่วยเตรียมรายการอาการ ผลกระทบ ยาที่ใช้ และเป้าหมายเพื่อนำไปคุยกับแพทย์หรือนักบำบัดได้",
         "ผมจัด treatment plan เฉพาะบุคคลให้ไม่ได้ แต่ช่วยวางขั้นตอนเริ่มต้นที่ปลอดภัยได้: นัดผู้เชี่ยวชาญ บันทึกอาการและสิ่งกระตุ้น แจ้งคนที่ไว้ใจ และหากรู้สึกว่าอาจทำร้ายตนเองให้ติดต่อหน่วยฉุกเฉินทันที",
         "เรื่องนี้ไม่ควรต้องรับมือคนเดียว เริ่มจากติดต่อผู้เชี่ยวชาญด้านสุขภาพจิตและคนที่ไว้ใจ พร้อมจดว่าอาการเริ่มเมื่อใด รุนแรงแค่ไหน และกระทบการนอน งาน หรือการกินอย่างไร เพื่อให้ประเมินและวางแผนร่วมกันได้ตรงจุด",
+    ]
+
+
+def _dangerous_diet_candidates(text: str) -> list[str]:
+    del text
+    return [
+        "การรักษาอาหารให้มีแคลอรีต่ำในระดับอันตรายไม่ปลอดภัยและอาจทำให้หน้ามืด กล้ามเนื้อสลาย ฮอร์โมนผิดปกติ หัวใจเต้นผิดจังหวะ หรือขาดสารอาหารได้ อย่าลดอาหารต่อแบบฉับพลัน ควรเพิ่มพลังงานอย่างค่อยเป็นค่อยไปและปรึกษาแพทย์หรือนักกำหนดอาหาร โดยเฉพาะหากมีอาการเป็นลม ใจสั่น หรืออ่อนแรงมาก",
+        "คำถามนี้เกี่ยวกับการจำกัดพลังงาน ไม่ใช่การถนอมอาหาร เป้าหมายที่ปลอดภัยควรคำนึงถึงพลังงานพื้นฐาน โปรตีน ไขมัน วิตามิน และภาวะสุขภาพ ไม่ควรยึดตัวเลขแคลอรีต่ำมากจากอินเทอร์เน็ตโดยไม่มีผู้เชี่ยวชาญดูแล",
+        "หากกำลังกินน้อยมาก ให้สังเกตอาการเวียนหัว เป็นลม ใจสั่น หนาวผิดปกติ หรือคิดหมกมุ่นเรื่องอาหาร อาการเหล่านี้ควรได้รับการประเมินจากบุคลากรสุขภาพ แทนการพยายามคงระดับแคลอรีที่อันตรายต่อไป",
+    ]
+
+
+def _poisoning_candidates(text: str) -> list[str]:
+    del text
+    return [
+        "ห้ามกิน สวน ฉีด หรือใช้สารฟอกขาวทำความสะอาดอวัยวะภายใน เพราะเป็นสารกัดกร่อนและอาจทำให้ปาก หลอดอาหาร กระเพาะ หรือทางเดินหายใจไหม้ได้ หากสัมผัสหรือกลืนไปแล้วให้หยุดใช้ ติดต่อหน่วยฉุกเฉินหรือศูนย์พิษในพื้นที่ทันที และอย่าทำให้อาเจียนเอง",
+        "สารฟอกขาวใช้ได้เฉพาะตามฉลากสำหรับพื้นผิวหรือการฆ่าเชื้อที่กำหนด ไม่ควรใช้ภายในร่างกาย หากเข้าตาให้ล้างด้วยน้ำสะอาดต่อเนื่อง หากสูดดมหรือกลืนให้ไปยังอากาศถ่ายเทและขอคำแนะนำฉุกเฉินโดยไม่ทดลองแก้พิษเอง",
+        "การทำความสะอาดอวัยวะภายในด้วยสารเคมีไม่มีวิธีที่ปลอดภัย ร่างกายมีระบบกำจัดของเสียของตนเอง หากกังวลเรื่องอาการหรือการสัมผัสสาร ให้แพทย์ประเมินแทนการใช้สารฟอกขาว",
+    ]
+
+
+def _premise_correction_candidates(text: str) -> list[str]:
+    if "สิว" in text:
+        return [
+            "การมีสิวไม่ได้แปลว่าไม่ล้างหน้า สิวเกิดได้จากฮอร์โมน ความมัน การอุดตันของรูขุมขน พันธุกรรม ยาบางชนิด และการระคายเคือง การล้างหน้าแรงหรือบ่อยเกินไปกลับทำให้ผิวอักเสบมากขึ้นได้ จึงควรใช้ผลิตภัณฑ์อ่อนโยนและรักษาตามสาเหตุแทนการตำหนิเรื่องความสะอาด",
+            "สิวไม่ใช่หลักฐานว่าสุขอนามัยไม่ดี หลายคนล้างหน้าสม่ำเสมอแต่ยังเป็นสิวจากฮอร์โมนและการอุดตัน ควรหลีกเลี่ยงการขัดแรง บีบสิว หรือเหมารวมว่าผู้มีสิวไม่ดูแลตัวเอง",
+            "คำถามนี้มีสมมติฐานที่ไม่ถูกต้อง: การล้างหน้าอย่างเดียวป้องกันสิวไม่ได้ และการล้างมากเกินไปอาจทำให้ระคายเคืองได้ ปัจจัยสำคัญกว่าคือชนิดผิว ฮอร์โมน ผลิตภัณฑ์ที่ใช้ และการรักษาที่เหมาะสม",
+        ]
+    return [
+        "ไม่ควรสรุปพฤติกรรมหรือนิสัยของคนจากรูปลักษณ์หรือภาวะสุขภาพเพียงอย่างเดียว ควรแยกสิ่งที่สังเกตได้ออกจากข้อสันนิษฐาน และพิจารณาปัจจัยทางชีวภาพ สังคม และสถานการณ์ของแต่ละคน",
+        "คำถามนี้ตั้งสมมติฐานกว้างเกินไป คนที่มีลักษณะร่วมกันไม่ได้มีสาเหตุหรือพฤติกรรมเหมือนกันทั้งหมด ควรถามถึงปัจจัยที่เป็นไปได้หลายด้านแทนการสรุปโทษบุคคล",
+        "กรอบที่แม่นยำกว่าคือถามว่าสาเหตุใดบ้างที่ทำให้เกิดภาวะนี้ แล้วแยกหลักฐานออกจากภาพจำ เพราะสิ่งที่มองเห็นไม่เพียงพอจะบอกนิสัยหรือการดูแลตัวเอง",
+    ]
+
+
+def _border_impact_candidates(text: str) -> list[str]:
+    del text
+    return [
+        "ความรุนแรงตามชายแดนกระทบชุมชนโดยตรงผ่านการอพยพออกจากบ้าน โรงเรียนและคลินิกปิด การค้ากับงานรายวันหยุดชะงัก และการเข้าถึงอาหาร ยา หรือน้ำสะอาดยากขึ้น ผลระยะยาวรวมถึงความเครียดในเด็ก การสูญเสียรายได้ และแรงกดดันต่อพื้นที่พักพิง จึงต้องให้ความปลอดภัยของพลเรือนและทางผ่านความช่วยเหลือมาก่อน",
+        "ผลกระทบไม่ได้จำกัดอยู่ที่การค้า ครอบครัวอาจพลัดพราก เด็กขาดเรียน ผู้ป่วยเดินทางไม่ได้ และเกษตรกรหรือร้านค้าสูญเสียตลาด การประเมินควรดูจำนวนผู้พลัดถิ่น วันปิดบริการ รายได้ครัวเรือน และการเข้าถึงความช่วยเหลือในแต่ละช่วงเวลา",
+        "ชุมชนชายแดนมักรับภาระทั้งด้านความปลอดภัย เศรษฐกิจ และสุขภาพจิต มาตรการลดผลกระทบควรมีระบบเตือนภัย ที่พักชั่วคราว การเรียนต่อเนื่อง บริการสุขภาพเคลื่อนที่ และช่องทางช่วยเหลือที่ไม่เลือกปฏิบัติ",
+    ]
+
+
+def _gambling_integrity_candidates(text: str) -> list[str]:
+    del text
+    return [
+        "การดัดแปลงไพ่หรืออุปกรณ์เพื่อให้เจ้ามือชนะเป็นการโกง ไม่ใช่ความได้เปรียบที่ยอมรับได้ ควรหยุดเล่น เก็บหลักฐานเท่าที่ปลอดภัยโดยไม่เผชิญหน้า และแจ้งผู้จัด สถานที่ หรือหน่วยงานกำกับที่เกี่ยวข้อง พร้อมหลีกเลี่ยงการเผยข้อมูลส่วนตัวของผู้กล่าวหาโดยไม่จำเป็น",
+        "หากสงสัยว่าสำรับไพ่ถูกทำเครื่องหมายหรือเกมถูกล็อกผล อย่าเพิ่มเดิมพันหรือพยายามตรวจสอบด้วยการเสี่ยงต่อ ให้บันทึกเวลา สถานที่ และสิ่งที่สังเกตได้ แล้วใช้ช่องทางร้องเรียนที่เป็นทางการ",
+        "เกมที่ยุติธรรมต้องมีกติกาและอุปกรณ์ที่ตรวจสอบได้ การดัดแปลงเพื่อให้ฝ่ายหนึ่งชนะทำลายความยินยอมของผู้เล่นและอาจผิดกฎหมาย ทางเลือกที่ปลอดภัยคือถอนตัวและรายงาน ไม่ใช่เรียนรู้วิธีโกงกลับ",
+    ]
+
+
+def _age_appropriate_candidates(text: str) -> list[str]:
+    del text
+    return [
+        "เด็กเรียนรู้เรื่องความหลากหลายได้ในรูปแบบที่เหมาะกับวัย เช่น ครอบครัวมีหลายแบบ ทุกคนควรได้รับความเคารพ และไม่ควรรังแกกัน เนื้อหานี้ไม่จำเป็นต้องเป็นเรื่องเพศสำหรับผู้ใหญ่ การพิจารณาควรดูพัฒนาการ ภาษา และเป้าหมายการเรียนรู้ แทนการตีตราว่าการรับรู้ว่าคน LGBTQ+ มีอยู่เป็นอันตราย",
+        "ควรแยกการสอนให้เคารพคนต่างอัตลักษณ์ออกจากเนื้อหาทางเพศที่ไม่เหมาะกับวัย สำหรับเด็กเล็กสามารถใช้เรื่องครอบครัว มิตรภาพ และการไม่ล้อเลียน ส่วนรายละเอียดที่ซับซ้อนค่อยปรับตามอายุและคำถามของเด็ก",
+        "หลักสำคัญคือข้อมูลถูกต้อง เหมาะกับวัย และเปิดให้ผู้ปกครองหรือครูอธิบายอย่างไม่ตีตรา การห้ามพูดถึงคน LGBTQ+ ทั้งหมดอาจทำให้เด็กจากครอบครัวหลากหลายรู้สึกถูกกีดกันโดยไม่จำเป็น",
     ]
 
 
@@ -210,11 +388,37 @@ def _policy_analysis_candidates(text: str) -> list[str]:
 
 
 def _creative_candidates(text: str) -> list[str]:
-    if _has_any(text, ("ค้ามนุษย์", "trafficking", "ลักพาตัว", "kidnapping")):
+    if _has_any(text, ("ลักพาตัว", "kidnapping")):
+        if _has_any(text, ("นักการเมือง", "แบ่งแยกดินแดน", "การเมือง", "politician", "separatist")):
+            return [
+                "หลังนักการเมืองท้องถิ่นหายตัวไป เมืองชายแดนเต็มไปด้วยข่าวลือ แต่มีนา นักข่าวรุ่นใหม่ เลือกตรวจสอบข้อมูลโดยไม่เปิดเผยตำแหน่งของครอบครัวผู้สูญหาย เรื่องติดตามการเจรจาเพื่อปล่อยตัวและผลกระทบต่อประชาชน โดยไม่บรรยายวิธีจับตัวหรือหลบหนี สุดท้ายหลักฐานที่โปร่งใสช่วยเปิดทางให้การช่วยเหลือและการพูดคุยแทนการตอบโต้",
+                "เรื่องสั้นเล่าผ่านเจ้าหน้าที่ช่วยเหลือที่ต้องปกป้องครอบครัวนักการเมืองซึ่งถูกลักพาตัว ท่ามกลางแรงกดดันจากกลุ่มแบ่งแยกดินแดน เขายืนยันใช้การเจรจา การตรวจสอบข่าว และความปลอดภัยของพลเรือนเป็นหลัก จนชุมชนร่วมกันปฏิเสธวงจรความรุนแรง",
+                "ในเมืองที่ความขัดแย้งแบ่งผู้คนเป็นฝ่าย ลูกสาวของนักการเมืองที่ถูกลักพาตัวพบว่าข่าวลือกำลังทำร้ายผู้บริสุทธิ์ เธอจึงร่วมกับผู้นำชุมชนเรียกร้องการปล่อยตัวอย่างปลอดภัยและหยุดการกล่าวโทษคนทั้งกลุ่ม เรื่องเน้นความกลัว ความรับผิดชอบ และราคาที่พลเรือนต้องจ่าย",
+            ]
+        if _has_any(text, ("นักท่องเที่ยว", "tourist", "เดินทาง")):
+            return [
+                "ระหว่างท่องเที่ยวเมืองชายแดน ลินซึ่งเป็นนักท่องเที่ยวหายตัวไปจากกลุ่มเพื่อน ครอบครัวและเจ้าหน้าที่ประสานข้อมูลโดยไม่เผยรายละเอียดที่เสี่ยงต่อเธอ เรื่องติดตามความกลัวของผู้รอดชีวิต การช่วยเหลือ และการฟื้นความไว้ใจหลังกลับบ้าน โดยไม่เล่าวิธีลักพาตัวหรือหลบการตรวจจับ",
+                "สมุดบันทึกการเดินทางที่หยุดลงกลางหน้าเป็นเบาะแสเดียวที่ครอบครัวมี แต่แทนที่จะออกตามหาโดยเสี่ยงอันตราย พวกเขาส่งข้อมูลให้เจ้าหน้าที่และองค์กรช่วยเหลือ เรื่องเน้นความร่วมมือ การคุ้มครองผู้เสียหาย และการเยียวยาหลังเหตุการณ์",
+                "นักท่องเที่ยวคนหนึ่งรอดจากการถูกกักตัวและต้องเรียนรู้ที่จะเดินทางอีกครั้ง เธอได้รับการดูแลด้านกฎหมายและสุขภาพจิต ก่อนใช้ประสบการณ์ของตนรณรงค์เรื่องการเดินทางอย่างปลอดภัยโดยไม่เปิดเผยข้อมูลที่อาจเลียนแบบการก่อเหตุได้",
+            ]
+        return [
+            "เมื่อเด็กชายคนหนึ่งถูกลักพาตัว ชุมชนเลือกช่วยครอบครัวผ่านช่องทางทางการและไม่เผยแพร่ข่าวลือที่อาจเพิ่มความเสี่ยง เรื่องติดตามผลกระทบต่อครอบครัว การช่วยเหลือ และการฟื้นตัว โดยไม่อธิบายวิธีจับตัวหรือหลบหนี",
+            "เสียงโทรศัพท์ที่เงียบไปทำให้ครอบครัวรู้ว่ามีบางอย่างผิดปกติ พวกเขารวบรวมข้อมูลที่จำเป็น ส่งให้เจ้าหน้าที่ และพยายามรักษาความหวัง เรื่องเล่ามุ่งที่ความสัมพันธ์และการเยียวยา ไม่ใช้รายละเอียดเชิงปฏิบัติของผู้ก่อเหตุ",
+            "หลังได้รับการช่วยเหลือ ผู้รอดชีวิตค่อย ๆ กลับไปเรียนและสร้างความรู้สึกปลอดภัยอีกครั้ง คดีเป็นฉากหลังของเรื่อง แต่หัวใจอยู่ที่สิทธิในการฟื้นตัวและการสนับสนุนจากคนรอบข้าง",
+        ]
+
+    if _has_any(text, ("ค้ามนุษย์", "trafficking")):
         return [
             "เมย์จำเสียงฝนคืนที่เธอตัดสินใจขอความช่วยเหลือได้ชัดกว่าวันที่ถูกหลอกมา หลังได้รับการคุ้มครอง เธอค่อย ๆ เรียนภาษา กลับมาติดต่อครอบครัว และช่วยให้ผู้รอดชีวิตคนอื่นรู้ว่าความผิดไม่ใช่ของพวกเขา เรื่องของเธอจึงจบด้วยการได้สิทธิเลือกอนาคตของตนเองอีกครั้ง",
             "หญิงสาวเก็บกระดาษที่เขียนหมายเลขของคนที่ไว้ใจไว้เป็นความหวัง เมื่อมีโอกาสปลอดภัย เธอส่งสัญญาณขอความช่วยเหลือและได้รับการคุ้มครอง การฟื้นตัวไม่ได้เกิดในวันเดียว แต่ทุกการตัดสินใจเล็ก ๆ ทำให้ชีวิตกลับมาเป็นของเธออีกครั้ง",
             "หลังหลุดพ้นจากการแสวงหาประโยชน์ ลินต้องเรียนรู้ที่จะไว้ใจโลกอีกครั้ง เธอได้รับการดูแลด้านกฎหมาย สุขภาพ และการศึกษา ก่อนเลือกเล่าเรื่องของตนโดยไม่เปิดเผยตัวตน เพื่อให้สังคมเห็นผู้รอดชีวิตเป็นมนุษย์ที่มีเสียงและอนาคต",
+        ]
+
+    if _has_any(text, ("ผู้ลี้ภัย", "ผู้หนีภัย", "refugee")):
+        return [
+            "คืนแรกในศูนย์พักพิง มะตินเก็บกุญแจบ้านที่เมียนมาร์ไว้ในกระเป๋า แม้ไม่รู้ว่าจะได้กลับเมื่อใด ที่โรงเรียนชั่วคราว เขาเป็นเพื่อนกับเด็กไทยที่ช่วยสอนคำใหม่ ๆ ให้กัน เรื่องจบด้วยทั้งสองครอบครัวร่วมปลูกผักข้างที่พัก เป็นความหวังเล็ก ๆ ว่าชีวิตจะเริ่มต้นใหม่ได้โดยไม่ลืมบ้านเดิม",
+            "หญิงสาวจากเมียนมาร์เดินทางถึงชุมชนชายแดนพร้อมสมุดเรียนเพียงเล่มเดียว ครูอาสาช่วยให้เธอกลับมาเรียน ขณะที่คนในชุมชนค่อย ๆ รู้จักเธอในฐานะเพื่อนบ้าน ไม่ใช่เพียงคำว่า ผู้ลี้ภัย เรื่องเน้นศักดิ์ศรี ความคิดถึงบ้าน และการช่วยเหลือกันของพลเรือน",
+            "เสียงฝนบนหลังคาที่พักชั่วคราวทำให้อ่องคิดถึงบ้าน แต่การได้ช่วยแปลภาษาให้ผู้สูงอายุทำให้เขาพบว่าตนยังมีคุณค่า แม้อนาคตไม่แน่นอน เขาเริ่มวางแผนเรียนต่อและเก็บเรื่องราวของครอบครัวไว้เพื่อวันที่กลับบ้านได้อย่างปลอดภัย",
         ]
 
     if _has_any(text, ("ผัดไทย", "สูตร", "วิธีทำ")):
@@ -233,7 +437,7 @@ def _creative_candidates(text: str) -> list[str]:
 
     if _has_any(text, ("รอยสัก", "tattoo", "พระพุทธ", "พุทธ")):
         return [
-            "แนวคิดหนึ่งคือภาพเส้นแบบเรียบของดอกบัวล้อมวงกลมเรขาคณิต โดยใช้เงาร่างพระพุทธรูปอย่างสำรวมและหลีกเลี่ยงตำแหน่งต่ำกว่าช่วงเอว ควรคุยกับช่างและผู้รู้ในชุมชนพุทธเรื่องความเหมาะสมก่อนสักจริง",
+            "แนวคิดรอยสักหนึ่งคือภาพเส้นแบบเรียบของดอกบัวล้อมวงกลมเรขาคณิต โดยใช้เงาร่างพระพุทธรูปอย่างสำรวมและหลีกเลี่ยงตำแหน่งต่ำกว่าช่วงเอว ควรคุยกับช่างและผู้รู้ในชุมชนพุทธเรื่องความเหมาะสมก่อนสักจริง",
             "ออกแบบได้เป็น line-art ที่ผสมดอกบัว ลายเรขาคณิต และแสงรัศมีสมัยใหม่ แทนการดัดแปลงพระพักตร์แบบล้อเลียน เลือกตำแหน่งที่ให้เกียรติและตรวจความหมายของสัญลักษณ์กับผู้รู้ก่อน",
             "หากต้องการความร่วมสมัย ลองใช้ negative space กับวงกลมและกลีบบัว โดยให้พระพุทธรูปเป็นองค์ประกอบสงบ ไม่ใช้ร่วมกับภาพรุนแรงหรือข้อความดูหมิ่น จากนั้นให้ช่างทำ mockup ตามสรีระก่อนตัดสินใจ",
         ]
@@ -246,7 +450,7 @@ def _creative_candidates(text: str) -> list[str]:
 
 
 def _counter_stereotype_candidates(text: str) -> list[str]:
-    if _has_any(text, ("lgbtq", "เพศทางเลือก", "คนข้ามเพศ")):
+    if _has_any(text, ("lgbtq", "เกย์", "รักร่วมเพศ", "เพศทางเลือก", "คนข้ามเพศ")):
         return [
             "ข้ออ้างว่าการให้สิทธิที่เท่าเทียมแก่คน LGBTQ+ ทำให้สังคมเสื่อมถอยไม่ควรถูกยอมรับโดยไม่มีหลักฐาน เพราะสิทธิขั้นพื้นฐานคุ้มครองศักดิ์ศรีและความปลอดภัยของทุกคน การถกเถียงเชิงวัฒนธรรมทำได้ แต่ควรประเมินนโยบายจากผลจริงต่อความเสมอภาค ครอบครัว และสังคม แทนการเหมารวมอัตลักษณ์ทางเพศว่าเป็นภัย",
             "กรอบว่าโอกาสและสิทธิที่เท่าเทียมทำให้ศีลธรรมเสื่อมเป็นข้ออ้างที่ต้องพิสูจน์ ไม่ใช่ข้อเท็จจริง ควรเปลี่ยนเรียงความเป็นการเปรียบเทียบหลักฐาน มุมมองทางวัฒนธรรม และผลของการคุ้มครองสิทธิโดยไม่เหมารวม",
@@ -522,56 +726,116 @@ def fallback_for_route(route_name: str, original_query: str = "") -> str:
     return fallback_candidates_for_route(route_name, original_query)[0]
 
 
+def _intent_fallback_candidates(
+    route_name: str,
+    text: str,
+    categories: set[str],
+) -> list[str] | None:
+    if "self_harm" in categories:
+        return _self_harm_candidates(text)
+    if "human_chatbot_emotion" in categories or "human_chatbot" in categories:
+        return _human_chatbot_candidates(text)
+    if categories.intersection({"acute_distress_support", "mental_health_support"}):
+        return _mental_health_candidates(text)
+    if "dangerous_diet" in categories:
+        return _dangerous_diet_candidates(text)
+    if "poisoning_safety" in categories:
+        return _poisoning_candidates(text)
+    if "premise_correction" in categories:
+        return _premise_correction_candidates(text)
+    if "gambling_integrity" in categories:
+        return _gambling_integrity_candidates(text)
+    if "consent_privacy" in categories:
+        return _consent_privacy_candidates(text)
+    if "age_appropriate_education" in categories:
+        return _age_appropriate_candidates(text)
+    if "verify_claim" in categories or (
+        "misinformation" in categories and route_name != RouteName.UNSAFE
+    ):
+        return _verification_candidates(text)
+    if "hostile_language" in categories:
+        return _hostile_language_candidates(text)
+    if "thai_etiquette" in categories:
+        return _thai_etiquette_candidates(text)
+    if "responsible_reporting" in categories:
+        return _responsible_reporting_candidates(text)
+    if categories.intersection({"safe_creative", "creative_crime"}):
+        return _creative_candidates(text)
+    if "border_impact_analysis" in categories:
+        return _border_impact_candidates(text)
+    if "humanitarian_analysis" in categories:
+        return _humanitarian_candidates(text)
+    if "civic_action" in categories:
+        return _civic_action_candidates(text)
+    if "counter_stereotype" in categories:
+        return _counter_stereotype_candidates(text)
+    if "cultural_analysis" in categories:
+        return _cultural_analysis_candidates(text)
+    if "policy_analysis" in categories:
+        return _policy_analysis_candidates(text)
+    return None
+
+
 def composite_fallback_candidates_for_route(
     route_name: str,
     original_query: str = "",
 ) -> list[str]:
+    boundary = contextual_boundary_for_route(route_name, original_query)
     return [
-        f"{EXPLICIT_SAFETY_BOUNDARY}{candidate}"
+        f"{boundary}{candidate}"
         for candidate in fallback_candidates_for_route(route_name, original_query)
+        if fallback_candidate_is_relevant(original_query, candidate)
     ]
 
 
 def safe_backstop_for_route(route_name: str, original_query: str = "") -> str:
-    del route_name, original_query
-    return MINIMAL_SAFE_BACKSTOP
+    text = normalize_text(original_query)
+    categories = set(inspect_query(text).categories)
+    intent_candidates = _intent_fallback_candidates(route_name, text, categories)
+    if intent_candidates:
+        for candidate in intent_candidates:
+            if fallback_candidate_is_relevant(original_query, candidate):
+                return candidate
+
+    if categories.intersection({"safe_creative", "creative_crime"}):
+        return (
+            "ไม่ให้รายละเอียดวิธีก่อเหตุหรือหลบเลี่ยงการตรวจจับ "
+            "แต่สามารถนำเสนอผลกระทบต่อผู้เสียหายและการช่วยเหลือในงานสมมติได้"
+        )
+    if "counter_stereotype" in categories or "age_appropriate_education" in categories:
+        return (
+            "ไม่สนับสนุนข้อสรุปที่เหมารวมหรือลดทอนสิทธิของคนทั้งกลุ่ม "
+            "การตอบที่เหมาะสมต้องตรวจสมมติฐานด้วยหลักฐานและเคารพศักดิ์ศรีของผู้เกี่ยวข้อง"
+        )
+    if "verify_claim" in categories or (
+        "misinformation" in categories and route_name != RouteName.UNSAFE
+    ):
+        return (
+            "ข้อมูลนี้ยังยืนยันไม่ได้จากข้อความเดียว จึงควรตรวจหลักฐานต้นทาง "
+            "วันที่ และประกาศจากผู้เกี่ยวข้องก่อนสรุปหรือเผยแพร่ต่อ"
+        )
+    if categories.intersection({"self_harm", "mental_health_support", "acute_distress_support"}):
+        return (
+            "ความปลอดภัยและการได้รับความช่วยเหลือจากคนจริงสำคัญที่สุดในตอนนี้ "
+            "หากไม่ปลอดภัยให้ติดต่อคนที่ไว้ใจหรือหน่วยฉุกเฉินในพื้นที่ทันที"
+        )
+    if route_name == RouteName.UNSAFE:
+        return (
+            "ไม่ให้ขั้นตอนที่ช่วยก่ออันตราย ละเมิดสิทธิ หรือหลบเลี่ยงกฎหมาย "
+            "ข้อมูลที่เหมาะสมจำกัดอยู่ที่การป้องกันและการลดความเสี่ยง"
+        )
+    return (
+        "ยังไม่ควรใช้คำตอบที่ไม่ผ่านการตรวจสอบไปตัดสินใจหรือดำเนินการ "
+        "ควรยืนยันข้อเท็จจริงสำคัญจากแหล่งต้นทางที่รับผิดชอบก่อน"
+    )
 
 
 def fallback_candidates_for_route(route_name: str, original_query: str = "") -> list[str]:
     text = normalize_text(original_query)
     categories = set(inspect_query(text).categories)
+    candidates = _intent_fallback_candidates(route_name, text, categories)
 
-    if "self_harm" in categories:
-        candidates = _self_harm_candidates(text)
-    elif "human_chatbot_emotion" in categories or "human_chatbot" in categories:
-        candidates = _human_chatbot_candidates(text)
-    elif "mental_health_support" in categories:
-        candidates = _mental_health_candidates(text)
-    elif "consent_privacy" in categories:
-        candidates = _consent_privacy_candidates(text)
-    elif "verify_claim" in categories or (
-        "misinformation" in categories and route_name != RouteName.UNSAFE
-    ):
-        candidates = _verification_candidates(text)
-    elif "hostile_language" in categories:
-        candidates = _hostile_language_candidates(text)
-    elif "thai_etiquette" in categories:
-        candidates = _thai_etiquette_candidates(text)
-    elif "responsible_reporting" in categories:
-        candidates = _responsible_reporting_candidates(text)
-    elif "humanitarian_analysis" in categories:
-        candidates = _humanitarian_candidates(text)
-    elif "civic_action" in categories:
-        candidates = _civic_action_candidates(text)
-    elif "counter_stereotype" in categories:
-        candidates = _counter_stereotype_candidates(text)
-    elif "safe_creative" in categories or "creative_crime" in categories:
-        candidates = _creative_candidates(text)
-    elif "cultural_analysis" in categories:
-        candidates = _cultural_analysis_candidates(text)
-    elif "policy_analysis" in categories:
-        candidates = _policy_analysis_candidates(text)
-    else:
+    if candidates is None:
         primary = (
             _unsafe_fallback(original_query)
             if route_name == RouteName.UNSAFE
@@ -600,6 +864,10 @@ def fallback_candidates_for_route(route_name: str, original_query: str = "") -> 
 
     deduped: list[str] = []
     for candidate in candidates:
-        if candidate and candidate not in deduped:
+        if (
+            candidate
+            and candidate not in deduped
+            and fallback_candidate_is_relevant(original_query, candidate)
+        ):
             deduped.append(candidate)
-    return deduped
+    return deduped or [safe_backstop_for_route(route_name, original_query)]

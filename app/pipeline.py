@@ -8,6 +8,8 @@ from app.inference.thai_guard import ThaiSafetyGuard
 from app.normalization import normalize_text
 from app.policies.fallback import (
     composite_fallback_candidates_for_route,
+    contextual_boundary_for_route,
+    fallback_candidate_is_relevant,
     fallback_candidates_for_route,
     fallback_for_route,
     safe_backstop_for_route,
@@ -21,6 +23,7 @@ from app.policies.response_policy import (
 from app.policies.rule_guard import inspect_query, inspect_response
 from app.postprocess import (
     clean_response,
+    has_entity_preservation_issue,
     has_incomplete_ending,
     has_rewrite_meta,
     has_unhelpful_over_refusal,
@@ -79,6 +82,10 @@ class TrustworthinessPipeline:
             "draft_visibility_overrides": 0,
             "rewrite_visibility_overrides": 0,
             "fallback_context_preserved": 0,
+            "model_boundary_candidates_scored": 0,
+            "model_boundary_candidates_accepted": 0,
+            "relevance_rejections": 0,
+            "entity_preservation_rejections": 0,
             "fallback_candidate_position_counts": {},
             "record_decisions": [
                 {
@@ -168,6 +175,10 @@ class TrustworthinessPipeline:
                 self.diagnostics["draft_han_rejected"] += 1
             if reason == "answerable intent received a generic refusal":
                 self.diagnostics["draft_over_refusal_rejected"] += 1
+            if reason == "response does not match requested task or topic":
+                self.diagnostics["relevance_rejections"] += 1
+            if reason == "response changed or omitted an input acronym":
+                self.diagnostics["entity_preservation_rejections"] += 1
             if reason == "accepted despite insufficient guard response visibility":
                 self.diagnostics["draft_visibility_overrides"] += 1
             if not accept:
@@ -268,6 +279,10 @@ class TrustworthinessPipeline:
                     self.diagnostics["rewrite_meta_rejected"] += 1
                 if reason == "answerable intent received a generic refusal":
                     self.diagnostics["rewrite_over_refusal_rejected"] += 1
+                if reason == "response does not match requested task or topic":
+                    self.diagnostics["relevance_rejections"] += 1
+                if reason == "response changed or omitted an input acronym":
+                    self.diagnostics["entity_preservation_rejections"] += 1
                 if reason == "accepted despite insufficient guard response visibility":
                     self.diagnostics["rewrite_visibility_overrides"] += 1
                 if candidate and accept:
@@ -282,6 +297,14 @@ class TrustworthinessPipeline:
                     record_indices=fallback_indices,
                     routes=routes,
                     original_queries=original_queries,
+                    model_candidates={
+                        record_index: [
+                            rewritten[local_index],
+                            drafts[record_index],
+                        ]
+                        for local_index, record_index in enumerate(rewrite_indices)
+                        if record_index in fallback_indices
+                    },
                 )
                 for record_index, fallback in validated_fallbacks.items():
                     final_responses[record_index] = fallback
@@ -316,6 +339,8 @@ class TrustworthinessPipeline:
             return False, "generation ended before a complete sentence"
         if has_unexpected_han(response, query=query):
             return False, "response contains unexpected Han characters"
+        if has_entity_preservation_issue(query, response):
+            return False, "response changed or omitted an input acronym"
         if reject_rewrite_meta and has_rewrite_meta(response):
             return False, "rewrite returned internal evaluation text"
         if has_unhelpful_over_refusal(
@@ -323,6 +348,11 @@ class TrustworthinessPipeline:
             reject_direct_refusal=requires_direct_answer(route),
         ):
             return False, "answerable intent received a generic refusal"
+        if has_helpfulness_priority(route) and not fallback_candidate_is_relevant(
+            query,
+            response,
+        ):
+            return False, "response does not match requested task or topic"
         if response_rules.severity == "unsafe":
             return False, response_rules.reason
         if thai_label == "unknown":
@@ -462,10 +492,20 @@ class TrustworthinessPipeline:
         record_indices: list[int],
         routes: list[Route],
         original_queries: list[str],
+        model_candidates: dict[int, list[str]],
     ) -> dict[int, str]:
         selected: dict[int, str] = {}
-        self._select_guard_eligible_fallbacks(
+        self._select_model_boundary_recoveries(
             record_indices=record_indices,
+            routes=routes,
+            original_queries=original_queries,
+            model_candidates=model_candidates,
+            selected=selected,
+        )
+
+        unresolved = [index for index in record_indices if index not in selected]
+        self._select_guard_eligible_fallbacks(
+            record_indices=unresolved,
             routes=routes,
             original_queries=original_queries,
             selected=selected,
@@ -536,6 +576,95 @@ class TrustworthinessPipeline:
 
         return selected
 
+    def _select_model_boundary_recoveries(
+        self,
+        record_indices: list[int],
+        routes: list[Route],
+        original_queries: list[str],
+        model_candidates: dict[int, list[str]],
+        selected: dict[int, str],
+    ) -> None:
+        candidate_queries: list[str] = []
+        candidate_responses: list[str] = []
+        candidate_records: list[int] = []
+        candidate_positions: list[int] = []
+
+        for record_index in record_indices:
+            if not has_helpfulness_priority(routes[record_index]):
+                continue
+            query = original_queries[record_index]
+            boundary = contextual_boundary_for_route(
+                routes[record_index].name,
+                query,
+            )
+            seen: set[str] = set()
+            for position, candidate in enumerate(
+                model_candidates.get(record_index, []),
+                start=1,
+            ):
+                candidate = clean_response(
+                    candidate,
+                    max_chars=int(self.config["limits"]["max_response_chars"]),
+                )
+                if (
+                    not candidate
+                    or candidate in seen
+                    or has_incomplete_ending(candidate)
+                    or has_rewrite_meta(candidate)
+                    or has_unexpected_han(candidate, query=query)
+                    or has_entity_preservation_issue(query, candidate)
+                    or has_unhelpful_over_refusal(candidate)
+                    or not fallback_candidate_is_relevant(query, candidate)
+                    or inspect_response(candidate, query=query).severity == "unsafe"
+                ):
+                    continue
+                seen.add(candidate)
+                candidate_queries.append(query)
+                candidate_responses.append(f"{boundary}{candidate}")
+                candidate_records.append(record_index)
+                candidate_positions.append(position)
+
+        if not candidate_responses:
+            return
+
+        assessments = self.thai_guard.classify_batch(
+            candidate_queries,
+            candidate_responses,
+        )
+        self.diagnostics["fallback_candidates_scored"] += len(candidate_responses)
+        self.diagnostics["model_boundary_candidates_scored"] += len(
+            candidate_responses
+        )
+
+        for candidate, record_index, position, assessment in zip(
+            candidate_responses,
+            candidate_records,
+            candidate_positions,
+            assessments,
+            strict=True,
+        ):
+            if record_index in selected:
+                continue
+            accept, reason = self._accept_output(
+                route=routes[record_index],
+                query=original_queries[record_index],
+                response=candidate,
+                thai_assessment=assessment,
+            )
+            if not accept:
+                continue
+
+            selected[record_index] = candidate
+            self.diagnostics["fallback_candidates_accepted"] += 1
+            self.diagnostics["model_boundary_candidates_accepted"] += 1
+            self._record_fallback_selection(
+                record_index=record_index,
+                position=position,
+                assessment=assessment,
+                stage="model_boundary_accepted",
+                reason=reason,
+            )
+
     def _preserve_low_visibility_context(
         self,
         record_indices: list[int],
@@ -543,21 +672,21 @@ class TrustworthinessPipeline:
         original_queries: list[str],
         selected: dict[int, str],
     ) -> None:
-        contextual_indices = [
-            index
-            for index in record_indices
-            if has_helpfulness_priority(routes[index])
-        ]
-        if not contextual_indices:
-            return
-
-        candidates = [
-            fallback_candidates_for_route(
+        contextual_entries: list[tuple[int, str]] = []
+        for index in record_indices:
+            if not has_helpfulness_priority(routes[index]):
+                continue
+            candidate = fallback_candidates_for_route(
                 routes[index].name,
                 original_query=original_queries[index],
             )[0]
-            for index in contextual_indices
-        ]
+            if fallback_candidate_is_relevant(original_queries[index], candidate):
+                contextual_entries.append((index, candidate))
+        if not contextual_entries:
+            return
+
+        contextual_indices = [index for index, _ in contextual_entries]
+        candidates = [candidate for _, candidate in contextual_entries]
         queries = [original_queries[index] for index in contextual_indices]
         visibility = self.thai_guard.response_visibility_batch(queries, candidates)
         assessments = self.thai_guard.classify_batch(queries, candidates)
@@ -626,6 +755,11 @@ class TrustworthinessPipeline:
                 original_query=original_queries[record_index],
             )
             for position, candidate in enumerate(candidates, start=1):
+                if not fallback_candidate_is_relevant(
+                    original_queries[record_index],
+                    candidate,
+                ):
+                    continue
                 candidate_queries.append(original_queries[record_index])
                 candidate_responses.append(candidate)
                 candidate_records.append(record_index)

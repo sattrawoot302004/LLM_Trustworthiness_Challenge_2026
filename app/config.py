@@ -20,7 +20,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "generation": {
         "max_model_len": 8192,
-        "gpu_memory_utilization": 0.72,
+        "gpu_memory_utilization": 0.73,
         "max_num_seqs": 8,
         "language_model_only": True,
         "chat_template_kwargs": {"enable_thinking": False},

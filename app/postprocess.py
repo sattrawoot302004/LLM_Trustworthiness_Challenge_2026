@@ -9,6 +9,26 @@ ROLE_PREFIX_RE = re.compile(r"^\s*(assistant|model|response)\s*:\s*", re.IGNOREC
 FENCE_RE = re.compile(r"^\s*```(?:\w+)?\s*(.*?)\s*```\s*$", re.DOTALL)
 TERMINAL_RE = re.compile(r"[.!?。！？](?:[\"'”’)]*)$")
 SENTENCE_BOUNDARY_RE = re.compile(r"[.!?。！？](?:[\"'”’)]*)")
+TRAILING_URL_RE = re.compile(r"(?:https?://|www\.)[^\s)\]}]+$", re.IGNORECASE)
+ACRONYM_RE = re.compile(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9&.-]{1,9}(?![A-Za-z0-9])")
+ENGLISH_PROPER_NAME_RE = re.compile(
+    r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){1,4}\b"
+)
+ACRONYM_ALLOWLIST = {
+    "AI",
+    "AML",
+    "API",
+    "COVID",
+    "FP8",
+    "GPU",
+    "HIV",
+    "KYC",
+    "LGBTQ",
+    "MFA",
+    "PID",
+    "SQL",
+    "URL",
+}
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 DANGLING_LIST_MARKER_RE = re.compile(
     r"(?:^|\n)\s*(?:\d{1,3}[.)]|[-*•])\s*$"
@@ -48,7 +68,7 @@ GENERIC_NONANSWER_PATTERNS = [
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
-        r"^หัวข้อนี้ตอบได้ในระดับข้อมูลทั่วไปและการลดความเสี่ยง",
+        r"หัวข้อนี้ตอบได้ในระดับข้อมูลทั่วไปและการลดความเสี่ยง",
         re.IGNORECASE,
     ),
     re.compile(
@@ -59,6 +79,18 @@ GENERIC_NONANSWER_PATTERNS = [
     re.compile(
         r"^(?:sorry[, ]*)?(?:i cannot|i can't|i am unable to)\s+"
         r"(?:help|answer|provide a complete answer)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"หัวข้อนี้ยังตอบได้โดยแยกข้อเท็จจริง\s+ความไม่แน่นอน\s+และผลกระทบ",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"สรุปให้เป็นขั้นตอนสั้น\s*ๆ\s*ได้ดังนี้",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"ประเด็นนี้ควรตอบอย่างระมัดระวังและไม่เหมารวมคนทั้งกลุ่ม",
         re.IGNORECASE,
     ),
 ]
@@ -110,6 +142,62 @@ def has_unhelpful_over_refusal(text: str, reject_direct_refusal: bool = False) -
     return reject_direct_refusal and bool(DIRECT_REFUSAL_RE.search(stripped))
 
 
+def has_entity_preservation_issue(query: str, response: str) -> bool:
+    required = {
+        acronym
+        for acronym in ACRONYM_RE.findall(query or "")
+        if acronym not in ACRONYM_ALLOWLIST
+    }
+    if not required:
+        return False
+    response_text = response or ""
+    response_upper = response_text.upper()
+    missing = {acronym for acronym in required if acronym not in response_upper}
+    if not missing:
+        return False
+
+    response_acronyms = {
+        acronym
+        for acronym in ACRONYM_RE.findall(response_text)
+        if acronym not in ACRONYM_ALLOWLIST
+    }
+    introduced_acronyms = response_acronyms - required
+    return bool(introduced_acronyms or ENGLISH_PROPER_NAME_RE.search(response_text))
+
+
+def _unclosed_delimiter_index(text: str) -> int | None:
+    stack: list[tuple[str, int]] = []
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for index, character in enumerate(text):
+        if character in "([{":
+            stack.append((character, index))
+        elif character in pairs:
+            if stack and stack[-1][0] == pairs[character]:
+                stack.pop()
+    if stack:
+        return stack[-1][1]
+    if text.count("```") % 2:
+        return text.rfind("```")
+    return None
+
+
+def has_unclosed_structure(text: str) -> bool:
+    stripped = (text or "").rstrip()
+    if not stripped:
+        return False
+    if _unclosed_delimiter_index(stripped) is not None:
+        return True
+    url_match = TRAILING_URL_RE.search(stripped)
+    return bool(
+        url_match
+        and not re.search(
+            r"(?:\.[a-z]{2,})(?:/[^\s]*)?$",
+            url_match.group(0),
+            re.IGNORECASE,
+        )
+    )
+
+
 def has_incomplete_ending(text: str) -> bool:
     stripped = (text or "").rstrip()
     if not stripped:
@@ -118,6 +206,7 @@ def has_incomplete_ending(text: str) -> bool:
         DANGLING_LIST_MARKER_RE.search(stripped)
         or DANGLING_HEADING_RE.search(stripped)
         or TRAILING_CONNECTOR_RE.search(stripped)
+        or has_unclosed_structure(stripped)
     )
 
 
@@ -127,6 +216,20 @@ def _remove_dangling_tail(text: str) -> str:
         match = pattern.search(stripped)
         if match:
             return stripped[: match.start()].rstrip()
+    unclosed_index = _unclosed_delimiter_index(stripped)
+    if unclosed_index is not None:
+        prefix = stripped[:unclosed_index].rstrip()
+        if prefix:
+            return prefix if TERMINAL_RE.search(prefix) else f"{prefix}."
+    url_match = TRAILING_URL_RE.search(stripped)
+    if url_match and not re.search(
+        r"(?:\.[a-z]{2,})(?:/[^\s]*)?$",
+        url_match.group(0),
+        re.IGNORECASE,
+    ):
+        prefix = stripped[: url_match.start()].rstrip(" ([:")
+        if prefix:
+            return prefix if TERMINAL_RE.search(prefix) else f"{prefix}."
     return stripped
 
 

@@ -61,6 +61,7 @@ def main() -> None:
     records = read_queries(input_path)
     log(f"loaded records: {len(records)}")
 
+    exit_code = 0
     try:
         log("starting model pipeline")
         from app.pipeline import TrustworthinessPipeline
@@ -75,6 +76,7 @@ def main() -> None:
     except Exception as exc:
         log("model pipeline failed; using emergency fallback responses")
         traceback.print_exc()
+        exit_code = 1
         responses = build_emergency_responses(records)
         run_status = {
             "status": "emergency_fallback",
@@ -98,6 +100,9 @@ def main() -> None:
         completed=len(records),
     )
     log("progress reported")
+
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
