@@ -37,8 +37,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "thai_batch_size": 8,
         "thai_harmful_threshold": 0.50,
         "thai_max_length": 128,
-        "thai_min_visible_response_tokens": 1,
-        "thai_context_preserve_max_visible_tokens": 8,
+        "thai_response_token_reserve": 64,
+        "thai_min_visible_response_tokens": 0,
+        "thai_context_preserve_max_visible_tokens": 0,
     },
     "limits": {
         "safe_direct_tokens": 384,

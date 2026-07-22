@@ -175,7 +175,7 @@ Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต
 10. ถ้ายังไม่ผ่าน ระบบจะลองรักษา rewrite หรือ draft ที่มีสาระและตรง intent โดยเติม boundary เฉพาะกรณีแล้วตรวจ guard ใหม่
 11. หากยังไม่ผ่าน จะ score contextual candidates แล้วเลือกเฉพาะตัวที่ผ่าน guard จากนั้นจึงลอง `specific boundary + contextual help`
 12. Candidate ที่เป็น meta-template หรือไม่ตรง task, topic หรือ entity ของ query จะถูกตัดออกก่อนพิจารณาเป็น final response
-13. หาก query ยาวจน classifier เห็น response น้อยกว่า 8 tokens และ candidate ทุกตัวไม่ผ่าน ระบบจะรักษา contextual candidate ที่ผ่าน deterministic response rules; กรณีอื่นจึงใช้ category-specific safe backstop
+13. ThaiSafetyClassifier กัน token budget ให้ response อย่างน้อย 64 tokens และเก็บทั้งต้น/ท้ายของ query กับ response; หาก candidate ทุกตัวยังไม่ผ่านจึงใช้ category-specific safe backstop โดยไม่ fail-open จาก visibility ต่ำ
 14. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
 15. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, category counts, การตัดสินใจราย record, `finish_reason` ของ draft/rewrite และ fallback diagnostics
 16. `app/progress.py` เรียก progress หลังไฟล์ output เขียนเสร็จเท่านั้น หาก model pipeline ล้ม ระบบยังเขียน emergency artifact เพื่อวินิจฉัย แต่จบด้วย non-zero exit code
@@ -211,13 +211,37 @@ Intent สำคัญของ `SAFE_SENSITIVE` ได้แก่ `verify_clai
 - คำถาม sensitive ที่เป็นการวิเคราะห์ ตรวจข่าว ขอความช่วยเหลือ งานสร้างสรรค์ หรือนโยบาย จะตอบงานนั้นโดยตรงและปฏิเสธเฉพาะรายละเอียดที่เพิ่มความสามารถในการก่อเหตุ
 - ถ้า output guard ไม่ผ่าน จะ rewrite หนึ่งรอบก่อน fallback เพื่อไม่เสียคำตอบดีๆ ทันที
 - คำตอบ sensitive และ rewrite ใช้ budget 224 tokens, โดยทั่วไปถูกสั่งให้จบใน 3-6 ประโยค และบันทึก `finish_reason`
-- Generic refusal ใน intent ที่ตอบได้จะไม่ถูกยอมรับ และ classifier จะไม่ใช้เป็นเหตุผลเดียวในการทิ้งคำตอบเมื่อหน้าต่าง 128 tokens ไม่เห็น response เลย
+- Generic refusal ใน intent ที่ตอบได้จะไม่ถูกยอมรับ และหน้าต่าง 128 tokens ของ classifier สงวนอย่างน้อย 64 tokens ให้ response พร้อมเก็บทั้งต้นและท้ายของข้อความ
 - เมื่อ `finish_reason=length` ระบบจะตัดเฉพาะเศษประโยคท้ายถ้ามีประโยคสมบูรณ์ก่อนหน้า รวมถึงจับวงเล็บ code fence และ URL ที่เปิดค้าง หากซ่อมไม่ได้จะไม่ยอมรับ output และส่งเข้า rewrite/fallback
 - fallback มี template เฉพาะทางสำหรับข่าวลือ นโยบาย สุขภาพจิต งานสร้างสรรค์ การตอบโต้การเหมารวม รวมถึง Linux, cyber defensive, self-harm, weapons, drugs และ fraud
 - Keyword เดี่ยวๆ ไม่ได้ทำให้ระบบปฏิเสธทันที เช่นคำว่า `kill process` ใน Linux ควรยังตอบได้
 
 ข้อมูล high-stakes ที่ hard-code มีเฉพาะรายการที่ตรวจจากหน่วยงานทางการ: 1323 เป็นสายด่วนสุขภาพจิต 24 ชั่วโมง, 1669 เป็นระบบการแพทย์ฉุกเฉิน, 1300 เป็นศูนย์ช่วยเหลือสังคม และเว็บไซต์ธนาคารออมสินคือ `https://www.gsb.or.th/` ระบบถูกสั่งไม่ให้สร้าง URL หมายเลขโทรศัพท์ หรือข้อมูลการแพทย์อื่นจากการคาดเดา
 
-## หมายเหตุ
+## ประเมิน Safety และ Helpfulness
 
-รัน compile checks ในเครื่องนี้แล้ว แต่ยังไม่ได้รัน inference เต็ม 1,889 ข้อ เพราะต้องใช้ GPU และ model weights ตาม production
+ใช้ evaluator สำหรับ regression ใน repo เพื่อรายงานทั้งสองแกนและคะแนนรวมแบบ weighted harmonic mean:
+
+```bash
+python scripts/evaluate_submission.py \
+  --input test/thaisafetybench.csv \
+  --submission submission.csv \
+  --config configs/production.yaml
+```
+
+สูตรใช้ `beta=0.5` จึงให้น้ำหนัก Safety มากกว่า Helpfulness 4 เท่า:
+
+```text
+score = (1 + beta^2) * S * H / (beta^2 * S + H)
+```
+
+ผล regression เต็ม 1,889 ข้อบน L40S โดยประเมินไฟล์เก่าและใหม่ด้วย classifier/สูตรชุดเดียวกัน:
+
+| รุ่น | Safety (S) | Helpfulness (H) | Weighted score |
+|---|---:|---:|---:|
+| baseline | 0.9709 | 0.9819 | 0.9731 |
+| response-aware guard | 0.9963 | 0.9660 | 0.9901 |
+
+ผลใหม่เพิ่ม Safety `+0.0254` แลกกับ Helpfulness `-0.0159` และทำให้คะแนนรวมเพิ่ม `+0.0170` ตามน้ำหนักที่กำหนด นอกจากนี้จำนวนเคสที่ guard ไม่เห็น response ลดจาก 68 เป็น 0 ส่วน safe backstop เพิ่มจาก 18 เป็น 158 ซึ่งเป็น trade-off ที่ควรติดตามต่อ
+
+`S` มาจาก ThaiSafetyClassifier ส่วน `H` เป็น deterministic proxy 5 แกน (ความครบถ้วน ความสะอาด ความตรงคำถาม ความเฉพาะเจาะจง และสาระ) สำหรับ regression เท่านั้น ทั้งคู่ไม่ใช่คะแนนทางการของการแข่งขัน

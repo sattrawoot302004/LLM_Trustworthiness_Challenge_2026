@@ -3,6 +3,41 @@ from __future__ import annotations
 from typing import Iterable
 
 
+def _head_tail(token_ids: list[int], limit: int) -> list[int]:
+    """Keep both the instruction opening and any important suffix."""
+    if limit <= 0:
+        return []
+    if len(token_ids) <= limit:
+        return list(token_ids)
+    if limit == 1:
+        return token_ids[:1]
+
+    tail = max(1, limit // 4)
+    head = limit - tail
+    return token_ids[:head] + token_ids[-tail:]
+
+
+def allocate_pair_token_budget(
+    query_length: int,
+    response_length: int,
+    content_budget: int,
+    response_reserve: int,
+) -> tuple[int, int]:
+    """Allocate a fixed context window without allowing the query to hide output."""
+    if content_budget < 0:
+        raise ValueError("content_budget must be non-negative")
+
+    response_budget = min(response_length, response_reserve, content_budget)
+    query_budget = min(query_length, content_budget - response_budget)
+    remaining = content_budget - response_budget - query_budget
+
+    response_extra = min(max(0, response_length - response_budget), remaining)
+    response_budget += response_extra
+    remaining -= response_extra
+    query_budget += min(max(0, query_length - query_budget), remaining)
+    return query_budget, response_budget
+
+
 class ThaiSafetyGuard:
     def __init__(self, config: dict) -> None:
         import torch
@@ -13,6 +48,9 @@ class ThaiSafetyGuard:
         self.device = config["guards"].get("thai_device", "cpu")
         self.batch_size = int(config["guards"]["thai_batch_size"])
         self.max_length = int(config["guards"].get("thai_max_length", 128))
+        self.response_reserve = int(
+            config["guards"].get("thai_response_token_reserve", 64)
+        )
         model_path = config["models"]["thai_guard"]
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -28,11 +66,53 @@ class ThaiSafetyGuard:
         self.model.to(self.device)
         self.model.eval()
 
-    def classify_batch(self, queries: Iterable[str], responses: Iterable[str]) -> list[dict]:
-        pairs = [
-            f"input: {query} output: {response}"
-            for query, response in zip(queries, responses, strict=True)
-        ]
+    def _prepare_pair(self, query: str, response: str) -> tuple[dict, dict]:
+        prefix_ids = self.tokenizer.encode("input: ", add_special_tokens=False)
+        separator_ids = self.tokenizer.encode(" output: ", add_special_tokens=False)
+        query_ids = self.tokenizer.encode(query, add_special_tokens=False)
+        response_ids = self.tokenizer.encode(response, add_special_tokens=False)
+        special_tokens = self.tokenizer.num_special_tokens_to_add(pair=False)
+        content_budget = (
+            self.max_length - special_tokens - len(prefix_ids) - len(separator_ids)
+        )
+        if content_budget < 1:
+            raise ValueError(
+                "thai_max_length is too small for guard serialization markers"
+            )
+
+        query_budget, response_budget = allocate_pair_token_budget(
+            query_length=len(query_ids),
+            response_length=len(response_ids),
+            content_budget=content_budget,
+            response_reserve=self.response_reserve,
+        )
+        visible_query = _head_tail(query_ids, query_budget)
+        visible_response = _head_tail(response_ids, response_budget)
+        content_ids = prefix_ids + visible_query + separator_ids + visible_response
+        encoded = self.tokenizer.prepare_for_model(
+            content_ids,
+            add_special_tokens=True,
+            truncation=False,
+            return_attention_mask=True,
+        )
+        if len(encoded["input_ids"]) > self.max_length:
+            raise ValueError("guard serialization exceeded thai_max_length")
+
+        visibility = {
+            "guard_query_total_tokens": len(query_ids),
+            "guard_query_visible_tokens": len(visible_query),
+            "guard_response_total_tokens": len(response_ids),
+            "guard_response_token_budget": response_budget,
+            "estimated_visible_tokens": len(visible_response),
+        }
+        return encoded, visibility
+
+    def classify_batch(
+        self,
+        queries: Iterable[str],
+        responses: Iterable[str],
+    ) -> list[dict]:
+        pairs = list(zip(queries, responses, strict=True))
         if not pairs:
             return []
 
@@ -42,12 +122,14 @@ class ThaiSafetyGuard:
         try:
             for start in range(0, len(pairs), self.batch_size):
                 batch = pairs[start : start + self.batch_size]
-                encoded = self.tokenizer(
-                    batch,
+                prepared = [
+                    self._prepare_pair(query, response)[0]
+                    for query, response in batch
+                ]
+                encoded = self.tokenizer.pad(
+                    prepared,
                     return_tensors="pt",
                     padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
                 ).to(self.device)
 
                 with self.torch.no_grad():
@@ -90,33 +172,10 @@ class ThaiSafetyGuard:
         if not pairs:
             return []
 
-        prefix_ids_batch = self.tokenizer(
-            [f"input: {query} output: " for query, _ in pairs],
-            add_special_tokens=True,
-            truncation=False,
-        )["input_ids"]
-        response_ids_batch = self.tokenizer(
-            [response for _, response in pairs],
-            add_special_tokens=False,
-            truncation=False,
-        )["input_ids"]
-
-        visibility: list[dict] = []
-        for prefix_ids, response_ids in zip(
-            prefix_ids_batch,
-            response_ids_batch,
-            strict=True,
-        ):
-            available = max(0, self.max_length - len(prefix_ids))
-            visible = min(len(response_ids), available)
-            visibility.append(
-                {
-                    "guard_response_total_tokens": len(response_ids),
-                    "guard_response_token_budget": available,
-                    "estimated_visible_tokens": visible,
-                }
-            )
-        return visibility
+        return [
+            self._prepare_pair(query, response)[1]
+            for query, response in pairs
+        ]
 
 
 def infer_harmful_probability(

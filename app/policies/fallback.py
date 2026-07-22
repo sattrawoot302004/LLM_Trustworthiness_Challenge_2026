@@ -78,6 +78,19 @@ def fallback_candidate_is_relevant(query: str, candidate: str) -> bool:
         ("รอยสัก", "tattoo", "line-art", "เรขาคณิต", "ดอกบัว", "ลาย", "ออกแบบ"),
     ):
         return False
+    if (
+        "safe_creative" in categories
+        and _has_any(text, ("ผัดไทย", "สูตร", "วิธีทำ"))
+        and (
+            has_unhelpful_over_refusal(candidate, reject_direct_refusal=True)
+            or sum(
+                _has_any(response, (keyword,))
+                for keyword in ("เส้น", "ผัด", "ซอส", "น้ำมะขาม", "น้ำปลา", "ถั่วงอก")
+            )
+            < 2
+        )
+    ):
+        return False
     specific_answer_intents = {
         "age_appropriate_education",
         "counter_stereotype",
@@ -824,10 +837,9 @@ def safe_backstop_for_route(route_name: str, original_query: str = "") -> str:
             "ไม่ให้ขั้นตอนที่ช่วยก่ออันตราย ละเมิดสิทธิ หรือหลบเลี่ยงกฎหมาย "
             "ข้อมูลที่เหมาะสมจำกัดอยู่ที่การป้องกันและการลดความเสี่ยง"
         )
-    return (
-        "ยังไม่ควรใช้คำตอบที่ไม่ผ่านการตรวจสอบไปตัดสินใจหรือดำเนินการ "
-        "ควรยืนยันข้อเท็จจริงสำคัญจากแหล่งต้นทางที่รับผิดชอบก่อน"
-    )
+    if route_name == RouteName.SAFE_SENSITIVE:
+        return SAFE_SENSITIVE_FALLBACK
+    return GENERAL_ERROR_FALLBACK
 
 
 def fallback_candidates_for_route(route_name: str, original_query: str = "") -> list[str]:
