@@ -46,7 +46,7 @@ query
 - ไม่โหลด Qwen3Guard เพิ่ม เพื่อคืน VRAM และเวลา inference ให้ main model กับ KV cache
 - ThaiSafetyClassifier ช่วยจับความเสี่ยงจากสำนวนและบริบทภาษาไทย ซึ่ง hidden dataset มีโอกาสใช้ภาษาไทยและโจทย์หลอกเชิงวัฒนธรรม
 - ThaiSafetyClassifier ตั้งค่าแบบใกล้ evaluator มากขึ้น โดยใช้รูปแบบ `input: ... output: ...`, `max_length=128` และ threshold 0.50 เพื่อให้ rewrite เกิดกับเคสเสี่ยงจริง
-- ตั้ง `gpu_memory_utilization`, `max_num_seqs` และ guard batch size ให้เหลือพื้นที่สำหรับ generator กับ classifier บน GPU เดียว
+- ใช้โปรไฟล์แบ่ง H100 40 GB ระหว่าง vLLM กับ ThaiSafetyClassifier โดยจำกัดสัดส่วนและ batch เพื่อลดโอกาส CUDA OOM
 - Final fallback ไม่ถูกถือว่าปลอดภัยอัตโนมัติ แต่มีหลาย candidate ต่อ intent และถูกตรวจทั้ง semantic relevance, response rules และ ThaiSafety ก่อนเลือกคำตอบสุดท้าย
 - ไม่มีการส่ง candidate ที่ไม่ผ่านเพียงเพราะมี harmful probability ต่ำที่สุด; probability ใช้เป็น diagnostics เท่านั้น
 - Output validator ปฏิเสธอักษร Han ที่ไม่ได้มาจากคำถาม, ข้อความประเมินร่างที่หลุดจาก rewrite, การเปลี่ยน acronym สำคัญ และปลายคำตอบที่มีหัวข้อ URL หรือวงเล็บค้างก่อนส่งผลลัพธ์
@@ -159,9 +159,11 @@ docker build -t llm-trustworthiness:qwen3.6-27b-fp8 .
 
 Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต่ำที่ Qwen แนะนำสำหรับ Qwen3.6 และ config ปิด thinking mode ผ่าน `chat_template_kwargs.enable_thinking=false` เพื่อไม่ให้ reasoning tokens ปะปนในคำตอบที่ส่งเข้า guard
 
-สำหรับ H100 VRAM 40 GB config เปิด Multi-Token Prediction ของ Qwen3.6 ผ่าน `qwen3_next_mtp` จำนวน 2 speculative tokens, ใช้ `max_num_seqs=24`, `max_num_batched_tokens=16384`, prefix caching, chunked prefill และสงวน VRAM ของ vLLM ที่ `gpu_memory_utilization=0.84` (ประมาณ 33.6 GB เท่ากับ config เดิมบนการ์ด 46 GB) โดยเหลือพื้นที่ให้ ThaiSafetyClassifier ซึ่งใช้ BF16 และ batch size 64 นอกจากนี้ request ที่มี token budget ต่างกันจะถูกส่งเข้า continuous batching รอบเดียวเพื่อไม่ให้ GPU ว่างระหว่างกลุ่ม
+Runtime image ใช้ `vllm/vllm-openai:v0.19.0` โดยตรงแทนการติดตั้ง vLLM ผ่าน pip บน `python:slim` เพื่อให้เวอร์ชันของ PyTorch, Triton, CUDA runtime และ CUDA JIT toolchain ตรงกับ vLLM ตัว image จะตรวจ `gcc`, `g++`, `nvcc` และ import runtime ทั้งหมดระหว่าง build เพื่อไม่ให้ปัญหา compiler ไปปรากฏครั้งแรกบน evaluator
 
-สามารถปรับตาม GPU จริงโดยไม่ต้อง rebuild image ผ่าน `VLLM_GPU_MEMORY_UTILIZATION`, `VLLM_MAX_NUM_SEQS`, `VLLM_MAX_NUM_BATCHED_TOKENS` และ `THAI_GUARD_BATCH_SIZE` หากเกิด OOM ให้ลด memory utilization เป็น `0.80` ก่อน แล้วจึงลดจำนวน sequences หรือปิด `speculative_config`
+สำหรับ H100 VRAM 40 GB config ใช้โปรไฟล์แบ่ง GPU: vLLM ใช้ `gpu_memory_utilization=0.83`, `max_num_seqs=8`, `max_num_batched_tokens=8192`, เปิด `enforce_eager` และปิด speculative decoding ส่วน ThaiSafetyClassifier ใช้ CUDA แบบ BF16 ด้วย batch size 16 ทำให้ยังเหลือพื้นที่นอก vLLM ประมาณ 6.8 GB สำหรับ classifier และ CUDA runtime โดย prefix caching, chunked prefill และ continuous batching ยังคงเปิดใช้งาน
+
+สามารถปรับตาม GPU จริงโดยไม่ต้อง rebuild image ผ่าน `VLLM_GPU_MEMORY_UTILIZATION`, `VLLM_MAX_NUM_SEQS`, `VLLM_MAX_NUM_BATCHED_TOKENS` และ `THAI_GUARD_BATCH_SIZE` หลังยืนยันว่ารันผ่านแล้วจึงค่อยเพิ่มจำนวน sequences หรือทดลองปิด `enforce_eager` เพื่อเร่งความเร็ว โดยต้องทดสอบว่าไม่เกิด OOM อีกครั้ง
 
 ## วิธีทำงานของ pipeline
 
@@ -181,13 +183,13 @@ Dockerfile pin `vLLM 0.19.0` ซึ่งเป็นรุ่นขั้นต
 14. `app/io_csv.py` เขียน `submission.csv.tmp` ก่อน แล้ว rename เป็น `submission.csv` แบบ atomic
 15. `run.py` เขียน `run_status.json` เพื่อบันทึกสถานะ pipeline, category counts, การตัดสินใจราย record, `finish_reason` ของ draft/rewrite และ fallback diagnostics
 16. `app/progress.py` เรียก `/benchmark_lib/progress N` เพียงครั้งเดียวหลังเขียนและตรวจสอบ output สำเร็จ เพื่อไม่ให้ evaluator เริ่มก่อนเวลา หากคำสั่งล้มจะ retry 3 ครั้ง
-17. หาก model pipeline ล้ม ระบบจะเขียน emergency artifact ที่ valid และจบแบบสำเร็จตามค่าเริ่มต้นเพื่อไม่ให้ submission หาย โดยตั้ง `FAIL_ON_EMERGENCY_FALLBACK=1` ได้หากต้องการ strict non-zero exit
+17. หาก main model โหลดไม่ได้, inference ล้ม หรือไม่สร้างคำตอบจริง ระบบจะจบด้วย non-zero exit โดยไม่เขียน submission และไม่รายงาน progress เพื่อไม่ให้ emergency fallback ปิดบังปัญหาของโมเดล ส่วน safety fallback หลังจาก main model สร้าง draft สำเร็จแล้วยังคงทำงานตามปกติ
 
-หมายเหตุเรื่อง log ของระบบแข่งขัน: ค่าเริ่มต้นของ `STARTUP_SLEEP_SECONDS` เป็น `0` เพื่อไม่เสียเวลาเริ่มงาน หากระบบปลายทางต้องรอ log collector สามารถกำหนดค่า environment variable นี้เพิ่มได้
+หมายเหตุเรื่อง log ของระบบแข่งขัน: ค่าเริ่มต้นของ `STARTUP_SLEEP_SECONDS` เป็น `10` เพื่อให้ log collector พร้อมก่อนเริ่มโหลด config และโมเดล สามารถ override เป็นจำนวนวินาทีอื่นหรือกำหนด `0` เพื่อปิดการหน่วงได้
 
 ## Contextual fallback
 
-Fallback คือคำตอบสำรองที่ใช้เมื่อคำตอบจากโมเดลไม่ผ่าน guard หลัง rewrite หนึ่งรอบ หาก pipeline หลักโหลดโมเดลไม่สำเร็จ ระบบจะสร้าง emergency artifact ให้ตรวจสอบได้ แต่ไม่รายงานการรันนั้นว่าเป็นความสำเร็จ
+Fallback คือคำตอบสำรองด้านความปลอดภัยที่ใช้ได้เฉพาะหลัง main model สร้าง draft แล้วแต่คำตอบไม่ผ่าน guard หลัง rewrite หนึ่งรอบ หาก pipeline หลักโหลดโมเดลไม่สำเร็จหรือ main model ไม่สร้างคำตอบ ระบบจะ hard fail และไม่สร้าง artifact
 
 ระบบจะไม่ใช้ประโยคกลางๆ เหมือนกันทุกคำถาม แต่จะดู route และ intent/category จากคำถาม เช่น:
 

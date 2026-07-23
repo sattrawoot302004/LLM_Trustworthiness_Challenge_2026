@@ -25,6 +25,7 @@ class MainGenerator:
         }
         for optional_key in (
             "max_num_batched_tokens",
+            "enforce_eager",
             "enable_prefix_caching",
             "enable_chunked_prefill",
         ):

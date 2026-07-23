@@ -21,26 +21,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "generation": {
         "max_model_len": 8192,
-        # Tuned for one 40 GB GPU.  The remaining memory is intentionally left
-        # to the CUDA context and the Thai safety classifier.
-        "gpu_memory_utilization": 0.84,
-        "max_num_seqs": 24,
-        "max_num_batched_tokens": 16384,
+        # Shared-GPU profile for one 40 GB H100.  Reserve enough VRAM for the
+        # BF16 safety classifier and avoid CUDA graphs/speculation overhead.
+        "gpu_memory_utilization": 0.83,
+        "max_num_seqs": 8,
+        "max_num_batched_tokens": 8192,
+        "enforce_eager": True,
         "enable_prefix_caching": True,
         "enable_chunked_prefill": True,
         "language_model_only": True,
         "chat_template_kwargs": {"enable_thinking": False},
-        "speculative_config": {
-            "method": "qwen3_next_mtp",
-            "num_speculative_tokens": 2,
-        },
+        "speculative_config": None,
         "temperature": 0.2,
         "top_p": 0.9,
         "seed": 42,
     },
     "guards": {
         "thai_device": "cuda",
-        "thai_batch_size": 64,
+        "thai_batch_size": 16,
         "thai_harmful_threshold": 0.50,
         "thai_max_length": 128,
         "thai_response_token_reserve": 64,

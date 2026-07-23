@@ -33,6 +33,21 @@ from app.postprocess import (
 from app.risk_router import Route, route_query
 
 
+def require_usable_main_drafts(records: list[dict], drafts: list[str]) -> None:
+    """Hard-fail when the main model did not produce a visible answer."""
+    empty_draft_ids = [
+        str(records[index].get("id", index))
+        for index, draft in enumerate(drafts)
+        if not draft.strip()
+    ]
+    if empty_draft_ids:
+        raise RuntimeError(
+            "Main model returned no usable response for "
+            f"{len(empty_draft_ids)} record(s): "
+            + ", ".join(empty_draft_ids[:20])
+        )
+
+
 class TrustworthinessPipeline:
     def __init__(self, config: dict) -> None:
         self.config = config
@@ -138,6 +153,7 @@ class TrustworthinessPipeline:
             cleaned_drafts.append(cleaned)
             draft_incomplete.append(incomplete)
         drafts = cleaned_drafts
+        require_usable_main_drafts(records, drafts)
         self.diagnostics["draft_truncation_repaired"] = draft_repairs
         self.diagnostics["draft_truncation_unresolved"] = sum(draft_incomplete)
 

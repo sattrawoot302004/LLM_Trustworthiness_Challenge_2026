@@ -1,24 +1,23 @@
-FROM python:3.12-slim-bookworm
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        libgomp1 \
-        libnuma1 \
-    && rm -rf /var/lib/apt/lists/*
+FROM vllm/vllm-openai:v0.19.0
 
 WORKDIR /workspace
 
 COPY requirements.lock /workspace/requirements.lock
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r /workspace/requirements.lock \
-    && python -m pip install --no-cache-dir vllm==0.19.0
+RUN python3 -m pip install --no-cache-dir -r /workspace/requirements.lock
+
+# Fail during image build instead of evaluator startup if the official runtime
+# ever lacks a compiler or CUDA JIT component required by vLLM/Triton.
+RUN command -v gcc \
+    && command -v g++ \
+    && command -v nvcc \
+    && python3 -c "import torch, triton, vllm; print(torch.__version__, triton.__version__, vllm.__version__)"
+
+ENV CC=/usr/bin/gcc
+ENV CXX=/usr/bin/g++
 
 RUN mkdir -p /workspace/scripts
 COPY scripts/download_models.py /workspace/scripts/download_models.py
-RUN HF_HOME=/tmp/hf-cache MODEL_DOWNLOAD_DIR=/opt/models python /workspace/scripts/download_models.py \
+RUN HF_HOME=/tmp/hf-cache MODEL_DOWNLOAD_DIR=/opt/models python3 /workspace/scripts/download_models.py \
     && rm -rf /opt/models/*/.cache /tmp/hf-cache
 
 COPY run.py /workspace/run.py
@@ -39,5 +38,7 @@ ENV TOKENIZERS_PARALLELISM=false
 ENV PYTHONUNBUFFERED=1
 ENV MODEL_ROOT=/opt/models
 
+# vllm/vllm-openai normally starts `vllm serve`; this submission runs its
+# offline batch pipeline directly instead.
 ENTRYPOINT []
-CMD ["python", "/workspace/run.py"]
+CMD ["python3", "/workspace/run.py"]

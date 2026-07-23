@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import subprocess
 import sys
 import tempfile
@@ -14,6 +13,7 @@ import run
 from app.config import load_config
 from app.inference.generator import MainGenerator
 from app.io_csv import find_input_csv, read_queries, validate_submission, write_submission
+from app.pipeline import require_usable_main_drafts
 from app.progress import report_progress
 
 
@@ -87,11 +87,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(overridden["generation"]["gpu_memory_utilization"], 0.75)
         self.assertEqual(overridden["generation"]["max_num_seqs"], 12)
         self.assertEqual(overridden["guards"]["thai_batch_size"], 16)
-        self.assertEqual(defaults["generation"]["gpu_memory_utilization"], 0.84)
-        self.assertEqual(defaults["generation"]["max_num_seqs"], 24)
+        self.assertEqual(defaults["generation"]["gpu_memory_utilization"], 0.83)
+        self.assertEqual(defaults["generation"]["max_num_seqs"], 8)
+        self.assertEqual(defaults["generation"]["max_num_batched_tokens"], 8192)
+        self.assertTrue(defaults["generation"]["enforce_eager"])
+        self.assertIsNone(defaults["generation"]["speculative_config"])
+        self.assertEqual(defaults["guards"]["thai_device"], "cuda")
+        self.assertEqual(defaults["guards"]["thai_batch_size"], 16)
 
 
 class GeneratorBatchingTests(unittest.TestCase):
+    def test_empty_main_model_response_hard_fails(self) -> None:
+        records = [{"id": "q001"}, {"id": "q002"}]
+        with self.assertRaisesRegex(RuntimeError, "q002"):
+            require_usable_main_drafts(records, ["real answer", "  "])
+
     def test_mixed_token_budgets_use_one_vllm_batch(self) -> None:
         calls: list[tuple[list[str], list[object]]] = []
 
@@ -133,6 +143,7 @@ class GeneratorBatchingTests(unittest.TestCase):
                 "gpu_memory_utilization": 0.8,
                 "max_num_seqs": 24,
                 "max_num_batched_tokens": 16384,
+                "enforce_eager": True,
                 "enable_prefix_caching": True,
                 "enable_chunked_prefill": True,
                 "seed": 42,
@@ -152,6 +163,8 @@ class GeneratorBatchingTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual([item.max_tokens for item in calls[0][1]], [128, 384, 224])
         self.assertEqual(generator.last_finish_reasons, ["stop", "stop", "stop"])
+        self.assertTrue(generator.llm.init_kwargs["enforce_eager"])
+        self.assertNotIn("speculative_config", generator.llm.init_kwargs)
 
 
 class ProgressTests(unittest.TestCase):
@@ -219,7 +232,7 @@ class EndToEndContractTests(unittest.TestCase):
             self.assertEqual(progress_values, [3])
             self.assertTrue(status_path.is_file())
 
-    def test_model_failure_still_produces_a_valid_submission_and_reports_n(self) -> None:
+    def test_model_failure_leaves_no_submission_or_progress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             input_dir = root / "model" / "test"
@@ -229,6 +242,9 @@ class EndToEndContractTests(unittest.TestCase):
             )
             output_path = root / "result" / "submission.csv"
             status_path = root / "result" / "run_status.json"
+            output_path.parent.mkdir(parents=True)
+            output_path.write_text("stale", encoding="utf-8")
+            status_path.write_text("stale", encoding="utf-8")
             config = {
                 "paths": {
                     "input_dir": str(input_dir),
@@ -237,8 +253,6 @@ class EndToEndContractTests(unittest.TestCase):
                     "progress_program": str(root / "benchmark_lib" / "progress"),
                 }
             }
-            progress_values: list[int] = []
-
             class FailingPipeline:
                 def __init__(self, config):
                     pass
@@ -252,30 +266,15 @@ class EndToEndContractTests(unittest.TestCase):
             with (
                 patch.dict(sys.modules, {"app.pipeline": fake_pipeline}),
                 patch.object(run, "load_config", return_value=config),
-                patch.object(
-                    run,
-                    "report_progress",
-                    side_effect=lambda *, completed, **kwargs: progress_values.append(
-                        completed
-                    ),
-                ),
-                patch.dict(
-                    "os.environ",
-                    {
-                        "STARTUP_SLEEP_SECONDS": "0",
-                        "FAIL_ON_EMERGENCY_FALLBACK": "0",
-                    },
-                    clear=False,
-                ),
+                patch.object(run, "report_progress") as progress,
+                patch.dict("os.environ", {"STARTUP_SLEEP_SECONDS": "0"}),
             ):
-                run.main()
+                with self.assertRaisesRegex(RuntimeError, "simulated model OOM"):
+                    run.main()
 
-            records = read_queries(input_dir / "dataset.csv")
-            self.assertEqual(validate_submission(records, output_path), 1)
-            self.assertEqual(progress_values, [1])
-            status = json.loads(status_path.read_text(encoding="utf-8"))
-            self.assertEqual(status["status"], "emergency_fallback")
-            self.assertEqual(status["progress_completed"], 1)
+            self.assertFalse(output_path.exists())
+            self.assertFalse(status_path.exists())
+            progress.assert_not_called()
 
 
 if __name__ == "__main__":

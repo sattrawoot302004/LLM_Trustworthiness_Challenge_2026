@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import time
-import traceback
 from pathlib import Path
 
 from app.config import load_config
@@ -13,31 +12,11 @@ from app.io_csv import (
     validate_submission,
     write_submission,
 )
-from app.normalization import normalize_text
-from app.policies.fallback import fallback_for_route
-from app.policies.rule_guard import inspect_query
 from app.progress import report_progress
-from app.risk_router import RouteName
 
 
 def log(message: str) -> None:
     print(f"[llm-trust] {message}", flush=True)
-
-
-def build_emergency_responses(records: list[dict]) -> list[str]:
-    responses: list[str] = []
-    for record in records:
-        rule_result = inspect_query(normalize_text(record["query"]))
-        if rule_result.severity == "unsafe":
-            route_name = RouteName.UNSAFE
-        elif rule_result.severity == "controversial":
-            route_name = RouteName.SAFE_SENSITIVE
-        else:
-            route_name = RouteName.SAFE_DIRECT
-        responses.append(
-            fallback_for_route(route_name, original_query=record["query"])
-        )
-    return responses
 
 
 def write_run_status(config: dict, status: dict) -> None:
@@ -62,9 +41,17 @@ def try_write_run_status(config: dict, status: dict) -> bool:
     return True
 
 
+def remove_stale_artifacts(config: dict) -> None:
+    """A failed model run must not leave evaluator-facing artifacts behind."""
+    for key in ("output_file", "status_file"):
+        path = Path(config["paths"][key])
+        path.unlink(missing_ok=True)
+        path.with_suffix(path.suffix + ".tmp").unlink(missing_ok=True)
+
+
 def main() -> None:
     started_at = time.monotonic()
-    sleep_seconds = max(0.0, float(os.environ.get("STARTUP_SLEEP_SECONDS", "0")))
+    sleep_seconds = max(0.0, float(os.environ.get("STARTUP_SLEEP_SECONDS", "10")))
     if sleep_seconds:
         log(f"startup sleep {sleep_seconds:g}s")
         time.sleep(sleep_seconds)
@@ -72,6 +59,7 @@ def main() -> None:
     config_path = os.environ.get("CONFIG_PATH", "/workspace/configs/production.yaml")
     log(f"loading config: {config_path}")
     config = load_config(config_path)
+    remove_stale_artifacts(config)
 
     log(f"finding input csv under: {config['paths']['input_dir']}")
     input_path = find_input_csv(config["paths"]["input_dir"])
@@ -81,31 +69,16 @@ def main() -> None:
 
     total_records = len(records)
 
-    exit_code = 0
-    try:
-        log("starting model pipeline")
-        from app.pipeline import TrustworthinessPipeline
+    log("starting model pipeline")
+    from app.pipeline import TrustworthinessPipeline
 
-        pipeline = TrustworthinessPipeline(config)
-        responses = pipeline.process(records)
-        run_status = {
-            "status": "model_pipeline_completed",
-            "diagnostics": pipeline.diagnostics,
-        }
-        log("model pipeline completed")
-    except Exception as exc:
-        log("model pipeline failed; using emergency fallback responses")
-        traceback.print_exc()
-        exit_code = int(
-            os.environ.get("FAIL_ON_EMERGENCY_FALLBACK", "0").lower()
-            in {"1", "true", "yes"}
-        )
-        responses = build_emergency_responses(records)
-        run_status = {
-            "status": "emergency_fallback",
-            "error": str(exc),
-            "records": len(records),
-        }
+    pipeline = TrustworthinessPipeline(config)
+    responses = pipeline.process(records)
+    run_status = {
+        "status": "model_pipeline_completed",
+        "diagnostics": pipeline.diagnostics,
+    }
+    log("model pipeline completed")
 
     log(f"writing submission: {config['paths']['output_file']}")
     write_submission(
@@ -140,10 +113,6 @@ def main() -> None:
     run_status["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
     try_write_run_status(config, run_status)
     log(f"final progress reported: {total_records}/{total_records}")
-
-    if exit_code:
-        raise SystemExit(exit_code)
-
 
 if __name__ == "__main__":
     main()
