@@ -18,6 +18,7 @@ from app.policies.response_policy import (
     build_generation_messages,
     build_rewrite_messages,
     has_helpfulness_priority,
+    is_benign_recovery_query,
     requires_direct_answer,
 )
 from app.policies.rule_guard import inspect_query, inspect_response
@@ -101,6 +102,8 @@ class TrustworthinessPipeline:
             "fallback_context_preserved": 0,
             "model_boundary_candidates_scored": 0,
             "model_boundary_candidates_accepted": 0,
+            "benign_recovery_candidates_scored": 0,
+            "benign_recovery_candidates_accepted": 0,
             "relevance_rejections": 0,
             "entity_preservation_rejections": 0,
             "fallback_candidate_position_counts": {},
@@ -513,8 +516,17 @@ class TrustworthinessPipeline:
         model_candidates: dict[int, list[str]],
     ) -> dict[int, str]:
         selected: dict[int, str] = {}
-        self._select_model_boundary_recoveries(
+        self._select_benign_model_recoveries(
             record_indices=record_indices,
+            routes=routes,
+            original_queries=original_queries,
+            model_candidates=model_candidates,
+            selected=selected,
+        )
+
+        unresolved = [index for index in record_indices if index not in selected]
+        self._select_model_boundary_recoveries(
+            record_indices=unresolved,
             routes=routes,
             original_queries=original_queries,
             model_candidates=model_candidates,
@@ -593,6 +605,101 @@ class TrustworthinessPipeline:
                 )
 
         return selected
+
+    def _select_benign_model_recoveries(
+        self,
+        record_indices: list[int],
+        routes: list[Route],
+        original_queries: list[str],
+        model_candidates: dict[int, list[str]],
+        selected: dict[int, str],
+    ) -> None:
+        candidate_queries: list[str] = []
+        candidate_responses: list[str] = []
+        candidate_records: list[int] = []
+        candidate_positions: list[int] = []
+
+        for record_index in record_indices:
+            query = original_queries[record_index]
+            if not is_benign_recovery_query(query, routes[record_index]):
+                continue
+            seen: set[str] = set()
+            for position, candidate in enumerate(
+                model_candidates.get(record_index, []),
+                start=1,
+            ):
+                candidate = clean_response(
+                    candidate,
+                    max_chars=int(self.config["limits"]["max_response_chars"]),
+                )
+                if (
+                    not candidate
+                    or candidate in seen
+                    or has_incomplete_ending(candidate)
+                    or has_rewrite_meta(candidate)
+                    or has_unexpected_han(candidate, query=query)
+                    or has_entity_preservation_issue(query, candidate)
+                    or has_unhelpful_over_refusal(candidate)
+                    or not fallback_candidate_is_relevant(query, candidate)
+                    or inspect_response(candidate, query=query).severity == "unsafe"
+                ):
+                    continue
+                seen.add(candidate)
+                candidate_queries.append(query)
+                candidate_responses.append(candidate)
+                candidate_records.append(record_index)
+                candidate_positions.append(position)
+
+        if not candidate_responses:
+            return
+
+        assessments = self.thai_guard.classify_batch(
+            candidate_queries,
+            candidate_responses,
+        )
+        self.diagnostics["fallback_candidates_scored"] += len(candidate_responses)
+        self.diagnostics["benign_recovery_candidates_scored"] += len(
+            candidate_responses
+        )
+        probability_limit = float(
+            self.config["guards"].get(
+                "thai_benign_recovery_max_probability",
+                self.config["guards"]["thai_harmful_threshold"],
+            )
+        )
+        ranked = sorted(
+            zip(
+                candidate_responses,
+                candidate_records,
+                candidate_positions,
+                assessments,
+                strict=True,
+            ),
+            key=lambda item: float(item[3].get("harmful_probability", 1.0)),
+        )
+
+        for candidate, record_index, position, assessment in ranked:
+            if record_index in selected:
+                continue
+            label = str(assessment.get("label", "unknown")).lower()
+            probability = float(assessment.get("harmful_probability", 1.0))
+            if label == "unknown" or probability > probability_limit:
+                continue
+
+            selected[record_index] = candidate
+            self.diagnostics["fallback_candidates_accepted"] += 1
+            self.diagnostics["benign_recovery_candidates_accepted"] += 1
+            self.diagnostics["fallback_selected_by_min_probability"] += 1
+            self._record_fallback_selection(
+                record_index=record_index,
+                position=position,
+                assessment=assessment,
+                stage="benign_model_recovered",
+                reason=(
+                    "recovered deterministic-safe answer to an ordinary math or "
+                    "constrained-format task after a low-confidence classifier rejection"
+                ),
+            )
 
     def _select_model_boundary_recoveries(
         self,

@@ -44,6 +44,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "thai_response_token_reserve": 64,
         "thai_min_visible_response_tokens": 0,
         "thai_context_preserve_max_visible_tokens": 0,
+        # Narrow escape hatch for classifier false positives on ordinary
+        # arithmetic and constrained-format tasks. Deterministic safety checks
+        # still run before a candidate can be recovered.
+        "thai_benign_recovery_max_probability": 0.60,
     },
     "limits": {
         "safe_direct_tokens": 384,

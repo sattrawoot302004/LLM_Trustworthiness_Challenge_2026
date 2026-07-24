@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.config import read_prompt
 from app.risk_router import Route, RouteName
 
@@ -181,6 +183,64 @@ GSB_FACTS = (
     "\nข้อเท็จจริงที่ใช้ได้เฉพาะเมื่อคำถามกล่าวถึงธนาคารออมสิน: "
     "เว็บไซต์ทางการคือ https://www.gsb.or.th/"
 )
+
+_BENIGN_RECOVERY_DENY_RE = re.compile(
+    r"(?:"
+    r"\b(?:bomb|explosive|weapon|firearm|gun|malware|ransomware|phishing|"
+    r"hack(?:ing)?|credential|poison|suicide|self[- ]?harm|kill|kidnap|"
+    r"cocaine|meth(?:amphetamine)?|drug trafficking|jailbreak)\b|"
+    r"ระเบิด|อาวุธ|ปืน|มัลแวร์|แรนซัมแวร์|ฟิชชิง|แฮ็ก|ขโมยรหัส|ยาพิษ|"
+    r"ฆ่าตัวตาย|ทำร้ายตัวเอง|ลักพาตัว|ยาเสพติด"
+    r")",
+    re.IGNORECASE,
+)
+_BENIGN_TASK_RE = re.compile(
+    r"(?:"
+    r"\b(?:write|rewrite|provide|create|make|respond|answer|explain|summari[sz]e|"
+    r"give|elaborate|expand|translate|list|format|compose|draft)\b|"
+    r"เขียน|เรียบเรียง|สร้าง|ตอบ|อธิบาย|สรุป|แปล|แจกแจง|จัดรูปแบบ"
+    r")",
+    re.IGNORECASE,
+)
+_BENIGN_FORMAT_RE = re.compile(
+    r"(?:"
+    r"\b(?:json|markdown|lowercase|uppercase|capital letters?|paragraphs?|"
+    r"sentences?|bullet points?|sections?|title|commas?|asterisks?|words?|"
+    r"keywords?|language|template|exactly|at least|at most|less than|"
+    r"more than|repeat|separate|highlight|only)\b|"
+    r"ตัวพิมพ์เล็ก|ตัวพิมพ์ใหญ่|ย่อหน้า|ประโยค|หัวข้อ|รายการ|จำนวนคำ|"
+    r"คำสำคัญ|ภาษา|แม่แบบ|เท่านั้น|อย่างน้อย|ไม่เกิน|คั่น|เน้นข้อความ"
+    r")",
+    re.IGNORECASE,
+)
+_BENIGN_MATH_RE = re.compile(
+    r"(?:"
+    r"\b(?:how many|how much|how long|what is|calculate|total|altogether|"
+    r"remaining|left|cost|price|average|per|each)\b|"
+    r"กี่|เท่าไร|เท่าไหร่|คำนวณ|รวม|ทั้งหมด|เหลือ|ราคา|เฉลี่ย|ต่อ"
+    r")",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(r"(?<!\w)[+-]?(?:\d+(?:[.,]\d+)?|\.\d+)")
+
+
+def is_benign_recovery_query(query: str, route: Route) -> bool:
+    """Allow narrow recovery for ordinary math and constrained-format tasks.
+
+    This gate is intentionally independent of dataset metadata. It only applies
+    to queries that the rule router already classified as category-free
+    ``SAFE_DIRECT`` and adds a conservative keyword denylist as defense in depth.
+    """
+    if (
+        route.name != RouteName.SAFE_DIRECT
+        or route.categories
+        or _BENIGN_RECOVERY_DENY_RE.search(query)
+    ):
+        return False
+
+    if len(_NUMBER_RE.findall(query)) >= 2 and _BENIGN_MATH_RE.search(query):
+        return True
+    return bool(_BENIGN_TASK_RE.search(query) and _BENIGN_FORMAT_RE.search(query))
 
 
 def _intent_guidance(route: Route) -> str:
